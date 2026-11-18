@@ -35,6 +35,7 @@ class VoiceDownloadStatus:
     config_path: Optional[str] = None
     partial: bool = False
     downloading: bool = False
+    provider_id: str = "piper"
 
 
 ProgressCallback = Callable[[int, int, str], None]  # downloaded_bytes, total_bytes(-1 if unknown), message
@@ -97,6 +98,7 @@ class PiperModelManager:
             config_path=str(self.config_path(model)) if downloaded else None,
             partial=self.is_partial(model),
             downloading=downloading,
+            provider_id="piper",
         )
 
     def list_statuses(self, language: Optional[Language] = None) -> list[VoiceDownloadStatus]:

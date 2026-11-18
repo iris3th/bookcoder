@@ -50,6 +50,14 @@ def create_app() -> Flask:
     def health():
         return jsonify({"ok": True, "ffmpeg": bool(ensure_ffmpeg())})
 
+    @app.get("/api/hardware")
+    def hardware_info():
+        try:
+            from ..core.hardware import detect_hardware
+            return jsonify({"ok": True, "hardware": detect_hardware()})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e), "hardware": None}), 200
+
     @app.get("/api/providers")
     def list_providers():
         lang = _parse_language(request.args.get("language"))
@@ -66,14 +74,22 @@ def create_app() -> Flask:
                 "supports_styles": p.supports_styles,
                 "requires_api_key": p.requires_api_key,
             }
-            # Extra info for piper
-            if p.id == "piper" and state.tts_registry.piper_manager:
-                try:
+            # Extra info for offline model providers
+            try:
+                if p.id == "piper" and getattr(state.tts_registry, "piper_manager", None):
                     statuses = state.tts_registry.piper_manager.list_statuses(lang)
-                    info["downloaded_voice_count"] = sum(1 for s in statuses if s.downloaded)
+                    info["downloaded_voice_count"] = sum(1 for s in statuses if getattr(s, "downloaded", False))
                     info["catalog_voice_count"] = len(statuses)
-                except Exception:
-                    pass
+                elif p.id == "coqui-xtts" and getattr(state.tts_registry, "coqui_manager", None):
+                    statuses = state.tts_registry.coqui_manager.list_statuses(lang)
+                    info["downloaded_voice_count"] = sum(1 for s in statuses if getattr(s, "downloaded", False))
+                    info["catalog_voice_count"] = len(statuses)
+                elif p.id == "mms-tts" and getattr(state.tts_registry, "mms_manager", None):
+                    statuses = state.tts_registry.mms_manager.list_statuses(lang)
+                    info["downloaded_voice_count"] = sum(1 for s in statuses if getattr(s, "downloaded", False))
+                    info["catalog_voice_count"] = len(statuses)
+            except Exception:
+                pass
             providers.append(info)
         return jsonify({"ok": True, "providers": providers})
 
@@ -97,40 +113,53 @@ def create_app() -> Flask:
     @app.get("/api/offline-models")
     def list_offline_models():
         lang = _parse_language(request.args.get("language"))
-        manager = state.tts_registry.piper_manager
-        if not manager:
-            return jsonify({"ok": False, "error": "Offline model manager is not available.", "models": []}), 200
+        provider_filter = (request.args.get("provider") or request.args.get("provider_id") or "").strip()
         try:
-            statuses = manager.list_statuses(lang)
+            managers = _offline_model_managers(state, provider_filter or None)
             models = []
-            for s in statuses:
-                d = asdict(s)
-                # merge live download progress
-                prog = state.download_progress.get(s.key)
-                if prog:
-                    d.update(prog)
-                models.append(d)
+            locations = {}
+            for pid, manager in managers:
+                try:
+                    statuses = manager.list_statuses(lang)
+                except Exception:
+                    statuses = []
+                if hasattr(manager, "models_dir"):
+                    try:
+                        locations[pid] = str(getattr(manager, "models_dir"))
+                    except Exception:
+                        pass
+                for s in statuses:
+                    d = asdict(s)
+                    d.setdefault("provider_id", pid)
+                    pkey = _download_progress_key(d.get("provider_id") or pid, d.get("key"))
+                    prog = state.download_progress.get(pkey)
+                    if prog:
+                        d.update(prog)
+                    models.append(d)
+            # keep Piper location as models_dir for backward-compatible UI fields
+            models_dir = locations.get("piper") or next(iter(locations.values()), "")
             return jsonify({
                 "ok": True,
-                "models_dir": str(manager.models_dir),
+                "models_dir": models_dir,
+                "locations": locations,
                 "models": models,
             })
         except Exception as e:
             traceback.print_exc()
             return jsonify({"ok": False, "error": str(e), "models": []}), 200
 
-    @app.post("/api/offline-models/<key>/download")
-    def download_offline_model(key: str):
-        manager = state.tts_registry.piper_manager
+    @app.post("/api/offline-models/<provider_id>/<key>/download")
+    def download_offline_model(provider_id: str, key: str):
+        manager = _get_offline_model_manager(state, provider_id)
         if not manager:
-            return jsonify({"ok": False, "error": "Offline model manager is not available."}), 400
-        # check if already downloading
-        prog = state.download_progress.get(key, {})
+            return jsonify({"ok": False, "error": f"Offline model manager is not available for provider '{provider_id}'."}), 400
+        pkey = _download_progress_key(provider_id, key)
+        prog = state.download_progress.get(pkey, {})
         if prog.get("status") == "downloading":
             return jsonify({"ok": True, "status": "downloading", "message": "Download already in progress."})
 
         def run_download():
-            state.download_progress[key] = {
+            state.download_progress[pkey] = {
                 "status": "downloading",
                 "progress": 0,
                 "message": "Starting download...",
@@ -144,7 +173,7 @@ def create_app() -> Flask:
                     pct = int(max(0, min(100, (downloaded / total) * 100)))
                 elif downloaded > 0:
                     pct = 0
-                state.download_progress[key] = {
+                state.download_progress[pkey] = {
                     "status": "downloading",
                     "progress": pct,
                     "message": message,
@@ -154,7 +183,7 @@ def create_app() -> Flask:
 
             try:
                 manager.download(key, progress=cb)
-                state.download_progress[key] = {
+                state.download_progress[pkey] = {
                     "status": "done",
                     "progress": 100,
                     "message": "Download complete.",
@@ -163,7 +192,7 @@ def create_app() -> Flask:
                 }
             except Exception as e:
                 traceback.print_exc()
-                state.download_progress[key] = {
+                state.download_progress[pkey] = {
                     "status": "error",
                     "progress": 0,
                     "message": str(e),
@@ -175,32 +204,43 @@ def create_app() -> Flask:
         t.start()
         return jsonify({"ok": True, "status": "downloading", "message": "Download started."})
 
-    @app.get("/api/offline-models/<key>/status")
-    def offline_model_status(key: str):
-        prog = state.download_progress.get(key)
-        manager = state.tts_registry.piper_manager
+    @app.get("/api/offline-models/<provider_id>/<key>/status")
+    def offline_model_status(provider_id: str, key: str):
+        pkey = _download_progress_key(provider_id, key)
+        prog = state.download_progress.get(pkey)
+        manager = _get_offline_model_manager(state, provider_id)
         status = None
         if manager:
             try:
-                from ..core.tts.piper_catalog import get_by_key
-                m = get_by_key(key)
-                if m:
-                    status = asdict(manager.get_status(m))
+                status = _offline_model_status(manager, provider_id, key)
             except Exception:
-                pass
+                status = None
         return jsonify({"ok": True, "download": prog, "model": status})
 
-    @app.post("/api/offline-models/<key>/delete")
-    def delete_offline_model(key: str):
-        manager = state.tts_registry.piper_manager
+    @app.post("/api/offline-models/<provider_id>/<key>/delete")
+    def delete_offline_model(provider_id: str, key: str):
+        manager = _get_offline_model_manager(state, provider_id)
         if not manager:
-            return jsonify({"ok": False, "error": "Offline model manager is not available."}), 400
+            return jsonify({"ok": False, "error": f"Offline model manager is not available for provider '{provider_id}'."}), 400
         try:
             st = manager.delete(key)
-            state.download_progress.pop(key, None)
+            state.download_progress.pop(_download_progress_key(provider_id, key), None)
             return jsonify({"ok": True, "model": asdict(st)})
         except Exception as e:
             return jsonify({"ok": False, "error": str(e)}), 400
+
+    # Legacy Piper-only routes (compatibility)
+    @app.post("/api/offline-models/<key>/download")
+    def download_offline_model_legacy(key: str):
+        return download_offline_model("piper", key)
+
+    @app.get("/api/offline-models/<key>/status")
+    def offline_model_status_legacy(key: str):
+        return offline_model_status("piper", key)
+
+    @app.post("/api/offline-models/<key>/delete")
+    def delete_offline_model_legacy(key: str):
+        return delete_offline_model("piper", key)
 
     @app.post("/api/upload")
     def upload():
@@ -696,6 +736,65 @@ def _run_generation_job(state: AppState, job: Job, book: Book, config: Generatio
 
 
 # ------------------ helpers ------------------
+
+def _download_progress_key(provider_id: str, key: str) -> str:
+    pid = (provider_id or "piper").strip() or "piper"
+    return f"{pid}:{key}"
+
+
+def _offline_model_managers(state: AppState, provider_filter: Optional[str] = None):
+    wanted = (provider_filter or "").strip()
+    managers = []
+    candidates = [
+        ("piper", getattr(state.tts_registry, "piper_manager", None)),
+        ("coqui-xtts", getattr(state.tts_registry, "coqui_manager", None)),
+        ("mms-tts", getattr(state.tts_registry, "mms_manager", None)),
+    ]
+    for pid, manager in candidates:
+        if wanted and wanted != pid:
+            continue
+        if manager is not None:
+            managers.append((pid, manager))
+    return managers
+
+
+def _get_offline_model_manager(state: AppState, provider_id: str):
+    pid = (provider_id or "piper").strip() or "piper"
+    for mpid, manager in _offline_model_managers(state, None):
+        if mpid == pid:
+            return manager
+    return None
+
+
+def _offline_model_status(manager, provider_id: str, key: str):
+    pid = (provider_id or "piper").strip() or "piper"
+    model = None
+    try:
+        if pid == "piper":
+            from ..core.tts.piper_catalog import get_by_key
+            model = get_by_key(key)
+        elif pid == "coqui-xtts":
+            from ..core.tts.coqui_catalog import get_by_key
+            model = get_by_key(key)
+        elif pid == "mms-tts":
+            from ..core.tts.mms_catalog import get_by_key
+            model = get_by_key(key)
+    except Exception:
+        model = None
+    if model is None:
+        # Fallback: scan statuses
+        try:
+            for s in manager.list_statuses(None):
+                if getattr(s, "key", None) == key:
+                    return asdict(s)
+        except Exception:
+            pass
+        return None
+    try:
+        return asdict(manager.get_status(model))
+    except Exception:
+        return None
+
 
 def _resolve_provider(state: AppState, provider_id: str, lang):
     pid = (provider_id or "").strip()

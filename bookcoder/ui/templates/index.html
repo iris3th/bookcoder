@@ -24,7 +24,7 @@
     <main class="layout">
       <section class="panel panel-main">
         <div class="panel-header">
-          <h2>1. Source Book</h2>
+          <h2>Source Book</h2>
           <p>Import an ebook or text document. Supported formats: EPUB, MOBI, AZW3, TXT.</p>
         </div>
 
@@ -82,7 +82,7 @@
       <section class="panel">
         <div class="panel-header row-between">
           <div>
-            <h2>2. Chapters & Content</h2>
+            <h2>Chapters & Content</h2>
             <p id="chaptersSummary">Select, reorder, and exclude sections before generating audio. Chapters are collapsed to keep settings easy to reach.</p>
           </div>
           <div class="chapter-actions">
@@ -104,7 +104,7 @@
 
       <section class="panel">
         <div class="panel-header">
-          <h2>3. Narration Engine & Voice</h2>
+          <h2>Narration Engine & Voice</h2>
           <p>Choose an online or offline narration engine. Hungarian pronunciation is handled with language-specific voices.</p>
         </div>
 
@@ -213,45 +213,54 @@
       <section class="panel" id="offlineModelsPanel">
         <div class="panel-header row-between">
           <div>
-            <h2>3b. Offline Voice Models (Piper)</h2>
-            <p>Download recommended offline voices for English and Hungarian. Once downloaded, they work without internet.</p>
+            <h2>Offline Voice Models</h2>
+            <p id="offlineModelsSummary">Download and manage offline voice models for Piper, Coqui XTTS, and MMS-TTS. Expand to view available models.</p>
           </div>
           <div class="chapter-actions">
-            <button id="refreshModelsBtn" class="btn btn-secondary btn-sm" type="button">Refresh</button>
+            <button id="toggleOfflineModelsBtn" class="btn btn-secondary btn-sm" type="button" aria-expanded="false">Expand ▾</button>
           </div>
         </div>
 
-        <div class="model-filters">
-          <div class="field">
-            <label for="modelLanguageFilter">Language</label>
-            <select id="modelLanguageFilter" class="input">
-              <option value="current">Current narration language</option>
-              <option value="all">All languages</option>
-              <option value="en">English</option>
-              <option value="hu">Hungarian</option>
-            </select>
+        <div id="offlineModelsBody" class="hidden">
+          <div class="row-between" style="margin-bottom:10px; align-items:center; gap:12px;">
+            <div class="help-text" style="margin:0;">Download Piper voices and heavy-engine models (Coqui XTTS v2, Meta MMS-TTS) for offline narration. Some downloads are large and may take time.</div>
+            <div class="chapter-actions">
+              <button id="refreshModelsBtn" class="btn btn-secondary btn-sm" type="button">Refresh</button>
+            </div>
           </div>
-          <div class="field">
-            <label for="modelGenderFilter">Voice type</label>
-            <select id="modelGenderFilter" class="input">
-              <option value="all">All (Male & Female)</option>
-              <option value="Female">Female</option>
-              <option value="Male">Male</option>
-            </select>
-          </div>
-          <div class="field model-filter-info">
-            <label>Models location</label>
-            <div id="modelsDirInfo" class="help-text">—</div>
-          </div>
-        </div>
 
-        <div id="offlineRuntimeNotice" class="alert alert-info hidden"></div>
-        <div id="offlineModelsList" class="models-list"></div>
+          <div class="model-filters">
+            <div class="field">
+              <label for="modelLanguageFilter">Language</label>
+              <select id="modelLanguageFilter" class="input">
+                <option value="all" selected>All languages</option>
+                <option value="current">Current narration language</option>
+                <option value="en">English</option>
+                <option value="hu">Hungarian</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="modelGenderFilter">Voice type</label>
+              <select id="modelGenderFilter" class="input">
+                <option value="all">All (Male & Female)</option>
+                <option value="Female">Female</option>
+                <option value="Male">Male</option>
+              </select>
+            </div>
+            <div class="field model-filter-info">
+              <label>Models location</label>
+              <div id="modelsDirInfo" class="help-text">—</div>
+            </div>
+          </div>
+
+          <div id="offlineRuntimeNotice" class="alert alert-info hidden"></div>
+          <div id="offlineModelsList" class="models-list"></div>
+        </div>
       </section>
 
       <section class="panel">
         <div class="panel-header">
-          <h2>4. Output & Audio Generation</h2>
+          <h2>Output & Audio Generation</h2>
           <p>Generate high-quality audiobooks per chapter, with an optional combined edition. Choose MP3 or AAC (M4A) for iPhone.</p>
         </div>
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bookcoder"
-version = "0.1.0"
+version = "2.0.0"
 description = "BookCoder — Professional AI Audiobook Generator"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -27,6 +27,23 @@ dependencies = [
 # Additional/alternative TTS or processing backends can be added here in the future.
 dev = [
   "pytest>=8.0",
+]
+mms = [
+  "torch",
+  "transformers>=4.41",
+  "numpy",
+  "scipy",
+]
+coqui = [
+  "torch",
+  "TTS>=0.22.0",
+]
+heavy-tts = [
+  "torch",
+  "transformers>=4.41",
+  "numpy",
+  "scipy",
+  "TTS>=0.22.0",
 ]
 
 [project.scripts]

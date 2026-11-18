@@ -11,6 +11,8 @@ class TTSRegistry:
     def __init__(self) -> None:
         self._providers: dict[str, TTSProvider] = {}
         self.piper_manager = None
+        self.coqui_manager = None
+        self.mms_manager = None
         self._register_defaults()
 
     def _register_defaults(self) -> None:
@@ -30,6 +32,26 @@ class TTSRegistry:
 
             self.piper_manager = PiperModelManager()
             self.register(PiperTTSProvider(manager=self.piper_manager))
+        except Exception:
+            pass
+
+        # Coqui XTTS v2: heavy multilingual neural TTS (optional deps).
+        try:
+            from .coqui_manager import CoquiModelManager
+            from .coqui_tts_provider import CoquiXTTSProvider
+
+            self.coqui_manager = CoquiModelManager()
+            self.register(CoquiXTTSProvider(manager=self.coqui_manager))
+        except Exception:
+            pass
+
+        # Meta MMS-TTS: heavy offline neural TTS via transformers/torch (optional deps).
+        try:
+            from .mms_manager import MMSModelManager
+            from .mms_tts_provider import MMSTTSProvider
+
+            self.mms_manager = MMSModelManager()
+            self.register(MMSTTSProvider(manager=self.mms_manager))
         except Exception:
             pass
 

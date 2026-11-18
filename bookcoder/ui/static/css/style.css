@@ -234,12 +234,30 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 .tag-female { border-color: rgba(255, 150, 200, 0.35); color: #ffd6ea; }
 .tag-male { border-color: rgba(120, 180, 255, 0.35); color: #d8e8ff; }
 .tag-lang { border-color: rgba(110,231,200,0.35); color: #d6fff2; }
+.tag-provider { border-color: rgba(91,140,255,0.4); color: #d8e6ff; background: rgba(91,140,255,0.1); }
 .tag-ok { border-color: rgba(57,217,138,0.4); color: #cffff0; background: rgba(57,217,138,0.1); }
 .tag-warn { border-color: rgba(255,204,102,0.4); color: #ffe9bf; background: rgba(255,204,102,0.1); }
 .model-desc { color: var(--text-muted); font-size: 0.9rem; }
 .model-side { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; min-width: 220px; }
 .model-size { color: var(--text-dim); font-size: 0.84rem; }
-.model-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.model-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.model-icon-btn {
+  width: 36px;
+  height: 34px;
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.model-icon-download { color: #d8e6ff; }
+.model-icon-delete {
+  color: #ffd7db;
+  border-color: rgba(255,107,122,0.4);
+  background: rgba(255,107,122,0.08);
+}
+.model-icon-delete:hover { background: rgba(255,107,122,0.16); border-color: rgba(255,107,122,0.55); }
 .dl-progress { width: 220px; }
 .dl-progress-track { height: 8px; background: #0d1430; border: 1px solid var(--border-soft); border-radius: 999px; overflow: hidden; }
 .dl-progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--accent)); transition: width .2s ease; }

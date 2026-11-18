@@ -16,8 +16,11 @@ This README explains how to **install and configure BookCoder on Debian**.
 - **Narration engines:**
   - **Edge Neural TTS (online):** natural neural voices, no API key required (internet needed for synthesis/voice listing)
   - **Piper (offline):** local neural TTS; works offline after voice models are downloaded
+  - **Coqui XTTS v2 (offline, heavy, optional):** multilingual neural TTS (EN/HU) with higher-quality/expressive synthesis potential; requires heavy dependencies (Torch + TTS) and may download/load large models on first use
+  - **Meta MMS-TTS (offline, heavy, optional):** neural VITS voices via Transformers/Torch for EN/HU; requires heavy dependencies and may download/cache models on first use
 - **Voices:** English and Hungarian, male/female options (engine-dependent), voice previews, speed/pitch/style controls, dynamic tone profiles, dialogue/alternate-voice casting hooks, and pronunciation dictionary overrides/presets/import-export
-- **Offline model management (Piper):** in-app download, progress, delete, and “use voice” for recommended models
+- **Offline model management:** in-app download, progress, delete/remove, and “use” for Piper voices and heavy-engine models (Coqui XTTS v2, Meta MMS-TTS) where supported
+- **Hardware acceleration detection:** detects NVIDIA/AMD GPUs and PyTorch GPU acceleration availability (CUDA/ROCm) and uses GPU automatically for supported heavy engines when available
 - **Chapters:** automatic extraction/section detection, include/exclude, reorder, per-chapter audio output
 - **Output formats:** **MP3 (.mp3)** and **AAC (.m4a, iPhone-compatible)**
   - Separate file per chapter and optional combined audiobook
@@ -145,6 +148,42 @@ The app uses (among others):
 - `langdetect` — language detection support
 - `pydub` — audio processing helpers (works best with FFmpeg installed)
 
+#### Optional heavy TTS engines (not installed by default)
+
+Additional engines are supported when their dependencies are installed (they will appear as unavailable with install hints until then):
+
+- **Coqui XTTS v2**: `pip install -e ".[coqui]"` (or install `TTS` + `torch`)
+- **Meta MMS-TTS**: `pip install -e ".[mms]"` (or install `transformers` + `torch` + `numpy` + `scipy`)
+- **Both**: `pip install -e ".[heavy-tts]"`
+
+Notes:
+- These engines are **heavy** (PyTorch-based), may download large model files on first use, and can be much slower on CPU.
+- Coqui XTTS v2 and MMS-TTS can use GPU acceleration automatically when a compatible GPU-enabled PyTorch build is installed and detected (`torch.cuda.is_available()`).
+- Coqui XTTS v2 support depends on the installed `TTS` package/runtime behavior; some setups may require additional configuration (e.g. speaker/reference handling). If unavailable or synthesis fails, BookCoder will report the provider error and you can continue using Edge or Piper.
+
+#### GPU acceleration for heavy engines (NVIDIA / AMD)
+
+BookCoder can **detect** NVIDIA/AMD GPUs and PyTorch acceleration support, and will use the GPU for **Coqui XTTS v2** and **MMS-TTS** when available. BookCoder does **not** install GPU drivers, CUDA, or ROCm automatically.
+
+1. **Install/verify GPU drivers first**
+   - **NVIDIA:** install a supported NVIDIA driver for your GPU and Debian release (and reboot if needed). Verify with `nvidia-smi`.
+   - **AMD:** install the appropriate AMDGPU/ROCm stack for your GPU and OS. Verify with tools such as `rocminfo` / `rocm-smi` when available. (ROCm support depends on GPU model and distribution; check AMD’s ROCm compatibility matrix/support notes for Debian.)
+
+2. **Install a GPU-enabled PyTorch build** (inside your BookCoder virtual environment)
+   - Use the official PyTorch install selector for the correct command/wheels: <https://pytorch.org/get-started/locally/>
+   - **NVIDIA (CUDA):** install the CUDA build that matches your driver/runtime compatibility (the PyTorch selector will provide the recommended `pip` command).
+   - **AMD (ROCm, Linux):** install the ROCm-enabled PyTorch build supported for your GPU/ROCm version. On ROCm builds, PyTorch typically exposes GPU acceleration via `torch.cuda` APIs as well.
+   - After installing PyTorch (and engine deps), you can confirm detection in Python:
+     ```bash
+     python -c "import torch; print(torch.__version__); print('cuda_available=', torch.cuda.is_available()); print('hip=', getattr(torch.version,'hip',None))"
+     ```
+
+3. **Install BookCoder heavy engine dependencies and download models**
+   - Install engine deps, e.g. `pip install -e ".[coqui]"`, `pip install -e ".[mms]"`, or `pip install -e ".[heavy-tts]"`
+   - Download/load the model in the app’s **Offline Voice Models** panel (or allow first-use download). Large model downloads/caches are managed by the engine/runtime (Hugging Face/Coqui TTS caches, plus BookCoder status markers where applicable).
+
+If a compatible GPU runtime is not detected, BookCoder will fall back to CPU. Performance and compatibility depend on your GPU, drivers, and the installed PyTorch/TTS/Transformers versions.
+
 > If you install behind a proxy or restricted network, configure pip accordingly before installation.
 
 ---
@@ -212,15 +251,19 @@ Stored settings include (per language where applicable):
 
 You can edit preferences in the UI; BookCoder saves them automatically.
 
-### 6.2 Offline Piper model storage
+### 6.2 Offline model storage and management
 
-Default Piper voice model directory:
+**Piper voice models** (default directory):
 - `$XDG_DATA_HOME/bookcoder/piper-voices/` if `XDG_DATA_HOME` is set
 - otherwise `~/.local/share/bookcoder/piper-voices/`
 
-Each downloaded voice stores its `.onnx` and `.onnx.json` files locally. You can:
-- download/re-download models in the **“Offline Voice Models (Piper)”** panel
-- delete models from the UI to free disk space
+Each downloaded Piper voice stores its `.onnx` and `.onnx.json` files locally.
+
+**Heavy engine models (Coqui XTTS v2, MMS-TTS):**
+- Downloaded/cached by the underlying engine libraries (e.g. Coqui TTS cache and Hugging Face cache locations, depending on your environment/configuration)
+- BookCoder provides in-app download/progress/status and “use” actions in the **“Offline Voice Models”** panel, plus best-effort delete/remove support (MMS targets Hugging Face cache entries; Coqui deletion may be marker-based/manual depending on cache layout)
+
+In the UI you can download/re-download, remove/delete (where supported), and select downloaded models for narration. Internet access is required for model downloads; synthesis is local after download (subject to installed runtime dependencies).
 
 ### 6.3 Audiobook output directory
 
@@ -236,6 +279,8 @@ Generated files typically include:
 - **Piper (offline):** requires `piper-tts` (installed via dependencies) and at least one downloaded voice model.
   - Internet is needed only to download models.
   - After download, narration works without internet.
+- **Coqui XTTS v2 (offline, heavy, optional):** requires `TTS` and `torch` (and related runtime deps). First use may download/load large model data and synthesis can be slow on CPU. Can use NVIDIA/AMD GPU acceleration when a compatible GPU-enabled PyTorch runtime is installed and detected.
+- **Meta MMS-TTS (offline, heavy, optional):** requires `transformers` and `torch` (plus common numeric/audio deps). First use may download/cache model files from Hugging Face. Can use NVIDIA/AMD GPU acceleration when a compatible GPU-enabled PyTorch runtime is installed and detected.
 
 ### 6.5 Local-only access (recommended)
 
@@ -248,6 +293,8 @@ If you bind to another interface (for example `0.0.0.0`) to access it from anoth
 ## Container usage (Dockerfile / Podman Compose)
 
 This project includes a `Dockerfile` and a `podman-compose.yml` for local containerized usage. The container binds the app internally to `0.0.0.0:8765` and the compose file publishes it to **localhost only** (`127.0.0.1:8765`).
+
+The default image installs base dependencies (Edge TTS, Piper, ebook parsing/UI). Heavy offline engines (Coqui XTTS v2, MMS-TTS) and GPU-enabled PyTorch are **optional** and can be added at build time.
 
 ### Build and run with Podman Compose
 
@@ -281,12 +328,39 @@ docker compose -f podman-compose.yml up --build
 # or: docker-compose -f podman-compose.yml up --build
 ```
 
+### Optional heavy engines and GPU builds
+
+The `Dockerfile` supports build args for optional extras and custom pip install arguments:
+
+- `BOOKCODER_EXTRAS` — optional extras from `pyproject.toml` (e.g. `coqui`, `mms`, `heavy-tts`)
+- `PIP_EXTRA_ARGS` — extra `pip` args (useful for GPU-enabled PyTorch wheels/index URLs)
+
+Examples:
+
+```bash
+# Heavy engines (CPU, large installs/downloads at build/runtime as applicable)
+docker build --build-arg BOOKCODER_EXTRAS=heavy-tts -t bookcoder:heavy-cpu .
+
+# NVIDIA example (install CUDA-enabled PyTorch wheels matching your environment)
+docker build \
+  --build-arg BOOKCODER_EXTRAS=heavy-tts \
+  --build-arg PIP_EXTRA_ARGS="--extra-index-url https://download.pytorch.org/whl/cu121" \
+  -t bookcoder:nvidia .
+```
+
+For AMD ROCm, use ROCm-compatible PyTorch wheels/build args for your GPU/OS (see https://pytorch.org/get-started/locally/ and AMD ROCm docs/support matrix).
+
+**Container GPU runtime notes:**
+- **NVIDIA:** requires supported NVIDIA drivers on the host and NVIDIA Container Toolkit/runtime; run containers with GPU access (e.g. `docker run --gpus all ...`, or Podman equivalent).
+- **AMD:** typically requires ROCm-compatible host setup and device passthrough (e.g. `/dev/kfd`, `/dev/dri`) with appropriate permissions/groups; runtime support varies by GPU/OS and ROCm/PyTorch versions.
+- BookCoder detects GPUs/PyTorch acceleration inside the container and uses GPU for Coqui XTTS/MMS-TTS when `torch.cuda.is_available()` is true. It does not install host drivers/CUDA/ROCm automatically.
+
 ### Notes
 
-- **Persistence:** named volumes store BookCoder settings and downloaded Piper voice models (`/data/config`, `/data/share`).
+- **Persistence:** named volumes store BookCoder settings and cached/downloaded data under `/data/config` and `/data/share` (including Piper voices and heavy-engine caches/markers stored in the configured data paths).
 - **Audiobook output:** `./audiobooks` on the host is mounted to `/audiobooks` in the container. In the BookCoder UI, set the output folder to a path under `/audiobooks` (e.g. `/audiobooks/MyBook`) to access generated files on the host.
 - **Network exposure:** the compose file publishes only to `127.0.0.1` by default. Do not expose it publicly without additional protections.
-- **Offline models / online TTS:** container needs internet access for Edge TTS synthesis and for downloading Piper voice models (models persist in the volume after download).
+- **Offline models / online TTS:** container needs internet access for Edge TTS synthesis and for downloading Piper/Coqui/MMS models (downloaded data persists in volumes after download). Heavy models can be large and may take significant time to download/load.
 
 Example (local network use, at your own risk):
 
@@ -304,7 +378,7 @@ python -m bookcoder --host 0.0.0.0 --port 8765 --no-browser
 4. **Review detected language** (English/Hungarian) and override if needed
 5. **Select chapters** (include/exclude/reorder)
 6. **Choose narration engine and voice**
-   - For **Piper (Offline)**, download a recommended voice in **“Offline Voice Models (Piper)”** first
+   - For offline/heavy engines (Piper, Coqui XTTS v2, MMS-TTS), expand **“Offline Voice Models”** to download/manage models as needed before selecting a voice
    - Preview voice and adjust speed/pitch/style
    - Optionally choose a dynamic tone profile, paragraph/sentence pause controls, dialogue/alternate dialogue voices (smart quote-span casting hooks), and pronunciation dictionary entries (with presets/import/export) for more expressive/accurate narration
 7. **Configure output**

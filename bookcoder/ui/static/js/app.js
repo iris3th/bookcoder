@@ -15,6 +15,8 @@
     busy: false,
     downloadPollTimer: null,
     chaptersExpanded: false,
+    offlineModelsExpanded: false,
+    hardware: null,
   };
 
   // Elements
@@ -92,16 +94,58 @@
   const modelsDirInfo = $("modelsDirInfo");
   const offlineRuntimeNotice = $("offlineRuntimeNotice");
   const offlineModelsList = $("offlineModelsList");
+  const toggleOfflineModelsBtn = $("toggleOfflineModelsBtn");
+  const offlineModelsBody = $("offlineModelsBody");
+  const offlineModelsSummary = $("offlineModelsSummary");
 
   function init() {
     bindEvents();
     updateRangeLabels();
+    setChaptersExpanded(false);
+    setOfflineModelsExpanded(false);
+    loadHardwareInfo();
     loadInitialSettings().then(() => {
       refreshProviders().then(() => {
         refreshProviderStatus();
         loadOfflineModels();
       });
     });
+  }
+
+  async function loadHardwareInfo() {
+    try {
+      const res = await fetchJSON('/api/hardware');
+      if (res.ok && res.hardware) {
+        state.hardware = res.hardware;
+      } else {
+        state.hardware = null;
+      }
+    } catch (e) {
+      state.hardware = null;
+    }
+    updateProviderMeta();
+  }
+
+  function formatHardwareSummary(hw) {
+    if (!hw) return '';
+    const parts = [];
+    try {
+      const n = hw.gpus && hw.gpus.nvidia;
+      const a = hw.gpus && hw.gpus.amd;
+      if (n && n.present) parts.push(`NVIDIA GPU detected${(n.names && n.names[0]) ? ': ' + n.names[0] : ''}`);
+      if (a && a.present) parts.push(`AMD GPU detected${(a.names && a.names[0]) ? ': ' + a.names[0] : ''}`);
+      if ((!n || !n.present) && (!a || !a.present)) parts.push('No NVIDIA/AMD GPU detected');
+      const torch = hw.torch || {};
+      if (torch.installed) {
+        if (torch.cuda_available) parts.push(`PyTorch GPU acceleration available${hw.acceleration && hw.acceleration.backend ? ' (' + hw.acceleration.backend + ')' : ''}`);
+        else parts.push('PyTorch installed (GPU acceleration unavailable)');
+      } else {
+        parts.push('PyTorch not installed (heavy GPU engines unavailable)');
+      }
+    } catch (e) {
+      return '';
+    }
+    return parts.join(' • ');
   }
 
   function bindEvents() {
@@ -142,7 +186,8 @@
     generateBtn.addEventListener("click", () => startGeneration());
     cancelBtn.addEventListener("click", () => cancelGeneration());
 
-    refreshModelsBtn.addEventListener("click", () => loadOfflineModels());
+    if (toggleOfflineModelsBtn) toggleOfflineModelsBtn.addEventListener("click", () => setOfflineModelsExpanded(!state.offlineModelsExpanded));
+    if (refreshModelsBtn) refreshModelsBtn.addEventListener("click", () => loadOfflineModels());
     modelLanguageFilter.addEventListener("change", () => loadOfflineModels());
     modelGenderFilter.addEventListener("change", () => renderOfflineModels());
 
@@ -362,16 +407,19 @@
     const p = (state.providers || []).find(x => x.id === state.selectedProviderId);
     if (!p) {
       providerMeta.textContent = '';
-      engineStatusBox.textContent = 'No narration engine selected.';
+      const hw = formatHardwareSummary(state.hardware);
+      engineStatusBox.textContent = hw ? `No narration engine selected. ${hw}` : 'No narration engine selected.';
       return;
     }
     providerMeta.textContent = p.description || '';
     const parts = [];
     parts.push(p.available ? `Available` : `Unavailable`);
     if (p.reason) parts.push(p.reason);
-    if (p.id === 'piper' && typeof p.downloaded_voice_count === 'number') {
-      parts.push(`${p.downloaded_voice_count} downloaded voice(s)`);
+    if (typeof p.downloaded_voice_count === 'number' && ['piper', 'coqui-xtts', 'mms-tts'].includes(p.id)) {
+      parts.push(`${p.downloaded_voice_count} downloaded model(s)/voice(s)`);
     }
+    const hw = formatHardwareSummary(state.hardware);
+    if (hw) parts.push(hw);
     engineStatusBox.textContent = parts.join(' • ');
 
     // Pitch support UI
@@ -388,24 +436,42 @@
   }
 
   function updateOfflineRuntimeNotice(p) {
-    const piper = (state.providers || []).find(x => x.id === 'piper');
-    if (!piper) {
+    const providers = state.providers || [];
+    const messages = [];
+    const selected = p || providers.find(x => x.id === state.selectedProviderId);
+
+    // Prefer context for selected offline/heavy provider if relevant
+    if (selected && ['piper', 'coqui-xtts', 'mms-tts'].includes(selected.id)) {
+      if (!selected.available) {
+        messages.push(`${selected.name}: ${selected.reason || 'Unavailable.'}`);
+      } else if (selected.id === 'piper' && (selected.downloaded_voice_count || 0) === 0) {
+        messages.push('Piper runtime is installed, but no offline voices are downloaded yet. Download a Piper voice model below, then select it in the Voice menu.');
+      } else if ((selected.id === 'coqui-xtts' || selected.id === 'mms-tts')) {
+        const pid = selected.id;
+        const downloaded = (state.offlineModels || []).filter(m => (m.provider_id || '') === pid && m.downloaded).length;
+        if (downloaded === 0) {
+          messages.push(`${selected.name} runtime is installed, but no models are downloaded/cached yet. Use the download option below (first download may be large).`);
+        }
+      }
+    }
+
+    // General unavailable runtime hints (helpful when browsing all models)
+    providers.forEach(pr => {
+      if (!['piper', 'coqui-xtts', 'mms-tts'].includes(pr.id)) return;
+      if (!pr.available && pr.reason) {
+        messages.push(`${pr.name}: ${pr.reason}`);
+      }
+    });
+
+    const unique = Array.from(new Set(messages.filter(Boolean)));
+    if (!unique.length) {
       offlineRuntimeNotice.classList.add('hidden');
+      offlineRuntimeNotice.textContent = '';
       return;
     }
-    if (!piper.available) {
-      offlineRuntimeNotice.textContent = piper.reason || 'Piper offline runtime is not installed. Install piper-tts to enable offline narration.';
-      offlineRuntimeNotice.className = 'alert alert-info';
-      offlineRuntimeNotice.classList.remove('hidden');
-      return;
-    }
-    if (p && p.id === 'piper' && (p.downloaded_voice_count || 0) === 0) {
-      offlineRuntimeNotice.textContent = 'No offline voices downloaded yet. Download one or more Piper voices below, then select one in the Voice menu.';
-      offlineRuntimeNotice.className = 'alert alert-info';
-      offlineRuntimeNotice.classList.remove('hidden');
-      return;
-    }
-    offlineRuntimeNotice.classList.add('hidden');
+    offlineRuntimeNotice.textContent = unique.join(' ');
+    offlineRuntimeNotice.className = 'alert alert-info';
+    offlineRuntimeNotice.classList.remove('hidden');
   }
 
   async function refreshProviderStatus() {
@@ -609,6 +675,45 @@
     chaptersSummary.textContent = `${total} chapter${total === 1 ? '' : 's'} extracted • ${selected} selected${words ? ` • ~${words.toLocaleString()} words` : ''}. Click "Show chapters" to review, reorder, or exclude.`;
   }
 
+  function setOfflineModelsExpanded(expanded) {
+    state.offlineModelsExpanded = !!expanded;
+    if (offlineModelsBody) offlineModelsBody.classList.toggle('hidden', !state.offlineModelsExpanded);
+    if (toggleOfflineModelsBtn) {
+      toggleOfflineModelsBtn.textContent = state.offlineModelsExpanded ? 'Hide ▴' : 'Expand ▾';
+      toggleOfflineModelsBtn.setAttribute('aria-expanded', state.offlineModelsExpanded ? 'true' : 'false');
+    }
+  }
+
+  function updateOfflineModelsSummary() {
+    if (!offlineModelsSummary) return;
+    const models = state.offlineModels || [];
+    if (!models.length) {
+      offlineModelsSummary.textContent = 'Download and manage offline voice models for Piper, Coqui XTTS, and MMS-TTS. Expand to view available models.';
+      return;
+    }
+    const total = models.length;
+    const downloaded = models.filter(m => m && m.downloaded).length;
+    const downloading = models.filter(m => m && (m.downloading || m.status === 'downloading')).length;
+    const byProvider = models.reduce((acc, m) => {
+      const pid = (m && m.provider_id) || 'piper';
+      acc[pid] = (acc[pid] || 0) + 1;
+      return acc;
+    }, {});
+    const providerParts = Object.entries(byProvider).map(([pid, n]) => `${providerLabel(pid)} ${n}`).join(', ');
+    let text = `${total} model${total === 1 ? '' : 's'} available • ${downloaded} downloaded`;
+    if (downloading) text += ` • ${downloading} downloading`;
+    if (providerParts) text += ` (${providerParts})`;
+    text += '. Expand to download, remove, or use models.';
+    offlineModelsSummary.textContent = text;
+  }
+
+  function providerLabel(providerId) {
+    if (providerId === 'piper') return 'Piper';
+    if (providerId === 'coqui-xtts') return 'Coqui XTTS';
+    if (providerId === 'mms-tts') return 'MMS-TTS';
+    return providerId || 'Offline';
+  }
+
   function moveChapter(index, delta) {
     const arr = state.book.chapters;
     const ni = index + delta;
@@ -715,8 +820,8 @@
     if (!voices.length) {
       const opt = document.createElement('option');
       opt.value = '';
-      if (state.selectedProviderId === 'piper') {
-        opt.textContent = 'No offline voices downloaded — download a model below';
+      if (['piper', 'coqui-xtts', 'mms-tts'].includes(state.selectedProviderId)) {
+        opt.textContent = 'No offline models downloaded — expand Offline Voice Models to download';
       } else {
         opt.textContent = 'No voices available';
       }
@@ -856,13 +961,26 @@
       const res = await fetchJSON(url);
       if (res.ok) {
         state.offlineModels = res.models || [];
-        modelsDirInfo.textContent = res.models_dir || '—';
+        if (res.models_dir) {
+          modelsDirInfo.textContent = res.models_dir;
+          if (res.locations && typeof res.locations === 'object') {
+            const extra = Object.entries(res.locations)
+              .filter(([pid, path]) => pid !== 'piper' && path)
+              .map(([pid, path]) => `${providerLabel(pid)}: ${path}`);
+            if (extra.length) modelsDirInfo.textContent = `${res.models_dir} (Piper). ${extra.join(' | ')}`;
+          }
+        } else if (res.locations && res.locations.piper) {
+          modelsDirInfo.textContent = res.locations.piper;
+        } else {
+          modelsDirInfo.textContent = res.error || '—';
+        }
       } else {
         state.offlineModels = [];
         modelsDirInfo.textContent = res.error || '—';
       }
     } catch (e) {
       state.offlineModels = [];
+      modelsDirInfo.textContent = '—';
     }
     renderOfflineModels();
     ensureDownloadPolling();
@@ -874,15 +992,20 @@
     if (genderFilter && genderFilter !== 'all') {
       models = models.filter(m => (m.gender || '').toLowerCase() === genderFilter.toLowerCase());
     }
+    updateOfflineModelsSummary();
+    updateOfflineRuntimeNotice((state.providers || []).find(p => p.id === state.selectedProviderId));
+
     if (!models.length) {
-      offlineModelsList.innerHTML = `<div class="empty-state">No offline voice models match the selected filters.</div>`;
+      offlineModelsList.innerHTML = `<div class="empty-state">No offline models match the selected filters.</div>`;
       return;
     }
     offlineModelsList.innerHTML = '';
     models.forEach(m => {
+      const providerId = m.provider_id || 'piper';
       const card = document.createElement('div');
       card.className = 'model-card' + (m.downloaded ? ' downloaded' : '');
       card.dataset.key = m.key;
+      card.dataset.providerId = providerId;
 
       const main = document.createElement('div');
       const name = document.createElement('div');
@@ -890,8 +1013,9 @@
       name.textContent = m.name || m.key;
       const tags = document.createElement('div');
       tags.className = 'model-tags';
+      tags.appendChild(makeTag(providerLabel(providerId), 'tag-provider'));
       tags.appendChild(makeTag(langName(m.language), 'tag-lang'));
-      tags.appendChild(makeTag(m.gender || '', m.gender === 'Female' ? 'tag-female' : (m.gender === 'Male' ? 'tag-male' : '')));
+      tags.appendChild(makeTag(m.gender || 'Neutral', m.gender === 'Female' ? 'tag-female' : (m.gender === 'Male' ? 'tag-male' : '')));
       if (m.quality) tags.appendChild(makeTag(m.quality, ''));
       if (m.downloaded) tags.appendChild(makeTag('Downloaded', 'tag-ok'));
       else if (m.downloading || (m.status === 'downloading')) tags.appendChild(makeTag('Downloading', 'tag-warn'));
@@ -926,30 +1050,40 @@
         track.appendChild(bar);
         const txt = document.createElement('div');
         txt.className = 'dl-progress-text';
-        txt.textContent = m.message ? `${m.message} ${pct ? '('+pct+'%)' : ''}` : `Downloading… ${pct}%`;
+        const msg = m.message || 'Downloading…';
+        txt.textContent = (typeof m.progress === 'number' && m.progress > 0) ? `${msg} (${pct}%)` : msg;
         progWrap.appendChild(track);
         progWrap.appendChild(txt);
         side.appendChild(progWrap);
-      } else if (m.downloaded) {
-        const useBtn = document.createElement('button');
-        useBtn.className = 'btn btn-success btn-sm';
-        useBtn.type = 'button';
-        useBtn.textContent = 'Use voice';
-        useBtn.addEventListener('click', () => useOfflineModel(m));
-        const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-danger btn-sm';
-        delBtn.type = 'button';
-        delBtn.textContent = 'Delete';
-        delBtn.addEventListener('click', () => deleteOfflineModel(m.key));
-        actions.appendChild(useBtn);
-        actions.appendChild(delBtn);
       } else {
-        const dlBtn = document.createElement('button');
-        dlBtn.className = 'btn btn-primary btn-sm';
-        dlBtn.type = 'button';
-        dlBtn.textContent = m.partial ? 'Re-download' : 'Download';
-        dlBtn.addEventListener('click', () => downloadOfflineModel(m.key));
+        const makeIconBtn = (icon, title, extraClass, onClick) => {
+          const btn = document.createElement('button');
+          btn.className = `icon-btn model-icon-btn${extraClass ? ' ' + extraClass : ''}`;
+          btn.type = 'button';
+          btn.title = title;
+          btn.setAttribute('aria-label', title);
+          btn.textContent = icon;
+          btn.addEventListener('click', onClick);
+          return btn;
+        };
+
+        const dlBtn = makeIconBtn('⬇', m.downloaded ? 'Re-download model' : (m.partial ? 'Re-download model' : 'Download model'), 'model-icon-download', () => downloadOfflineModel(providerId, m.key));
         actions.appendChild(dlBtn);
+
+        if (m.downloaded || m.partial) {
+          const delBtn = makeIconBtn('🗑', m.downloaded ? 'Delete downloaded model' : 'Remove incomplete model files', 'model-icon-delete', () => deleteOfflineModel(providerId, m.key));
+          actions.appendChild(delBtn);
+        }
+
+        if (m.downloaded) {
+          const useBtn = document.createElement('button');
+          useBtn.className = 'btn btn-success btn-sm';
+          useBtn.type = 'button';
+          useBtn.textContent = 'Use';
+          useBtn.title = 'Use this voice/model for narration';
+          useBtn.addEventListener('click', () => useOfflineModel(m));
+          actions.appendChild(useBtn);
+        }
       }
       side.appendChild(actions);
 
@@ -972,9 +1106,10 @@
     return code || '';
   }
 
-  async function downloadOfflineModel(key) {
+  async function downloadOfflineModel(providerId, key) {
     try {
-      const res = await fetchJSON(`/api/offline-models/${encodeURIComponent(key)}/download`, { method: 'POST' });
+      const pid = providerId || 'piper';
+      const res = await fetchJSON(`/api/offline-models/${encodeURIComponent(pid)}/${encodeURIComponent(key)}/download`, { method: 'POST' });
       if (!res.ok) throw new Error(res.error || 'Failed to start download');
       await loadOfflineModels();
       ensureDownloadPolling();
@@ -983,10 +1118,11 @@
     }
   }
 
-  async function deleteOfflineModel(key) {
-    if (!confirm('Delete this downloaded offline voice model? You can download it again later.')) return;
+  async function deleteOfflineModel(providerId, key) {
+    if (!confirm('Delete/remove this offline model? You can download it again later if supported.')) return;
     try {
-      const res = await fetchJSON(`/api/offline-models/${encodeURIComponent(key)}/delete`, { method: 'POST' });
+      const pid = providerId || 'piper';
+      const res = await fetchJSON(`/api/offline-models/${encodeURIComponent(pid)}/${encodeURIComponent(key)}/delete`, { method: 'POST' });
       if (!res.ok) throw new Error(res.error || 'Failed to delete model');
       await refreshProviders();
       await loadVoices(getEffectiveLanguage());
@@ -997,27 +1133,25 @@
   }
 
   async function useOfflineModel(m) {
-    // Switch to Piper provider and select this voice
-    state.selectedProviderId = 'piper';
-    if ((state.providers || []).some(p => p.id === 'piper')) {
-      providerSelect.value = 'piper';
-    } else {
-      await refreshProviders();
-      providerSelect.value = 'piper';
-      state.selectedProviderId = 'piper';
+    const providerId = m.provider_id || 'piper';
+    state.selectedProviderId = providerId;
+    await refreshProviders();
+    if ((state.providers || []).some(p => p.id === providerId)) {
+      providerSelect.value = providerId;
+      state.selectedProviderId = providerId;
     }
-    // Set language to model language if desired? keep current selection logic simple
     updateProviderMeta();
     await loadVoices(m.language || getEffectiveLanguage());
-    // select the voice
-    const vid = m.voice_id || `piper:${m.key}`;
-    if ((state.voices || []).some(v => v.id === vid)) {
+    const vid = m.voice_id || (providerId === 'piper' ? `piper:${m.key}` : '');
+    if (vid && (state.voices || []).some(v => v.id === vid)) {
       voiceSelect.value = vid;
+      state._pendingVoiceId = null;
+    } else if (vid) {
+      state._pendingVoiceId = vid;
     }
     updateVoiceMeta();
     await refreshProviderStatus();
-    saveSettings();
-    // scroll narration into view? not necessary
+    await saveSettings();
   }
 
   function ensureDownloadPolling() {
@@ -1049,17 +1183,14 @@
         const prevDownloading = (state.offlineModels || []).some(m => m.downloading || m.status === 'downloading');
         state.offlineModels = res.models || [];
         const nowDownloading = (state.offlineModels || []).some(m => m.downloading || m.status === 'downloading');
-        const anyDone = (state.offlineModels || []).some(m => m.status === 'done' || (m.downloaded && prevDownloading));
         renderOfflineModels();
         if (prevDownloading && !nowDownloading) {
           // downloads finished/changed state -> refresh providers/voices
           await refreshProviders();
-          if (state.selectedProviderId === 'piper') {
+          if (['piper', 'coqui-xtts', 'mms-tts'].includes(state.selectedProviderId)) {
             await loadVoices(getEffectiveLanguage());
           }
           refreshProviderStatus();
-        } else if (anyDone && state.selectedProviderId === 'piper') {
-          await loadVoices(getEffectiveLanguage());
         }
       }
     } catch (e) { /* ignore */ }
@@ -1072,8 +1203,8 @@
     const included = state.book.chapters.filter(c => c.included);
     if (!included.length) { showGenError('Please select at least one chapter to narrate.'); return; }
     if (!voiceSelect.value) {
-      if (state.selectedProviderId === 'piper') {
-        showGenError('Please download and select an offline Piper voice model first.');
+      if (['piper', 'coqui-xtts', 'mms-tts'].includes(state.selectedProviderId)) {
+        showGenError('Please download and select an offline voice model first (expand "Offline Voice Models").');
       } else {
         showGenError('Please select a narration voice.');
       }
