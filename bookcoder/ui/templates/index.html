@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ app_title }}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">BC</div>
+        <div>
+          <h1>BookCoder</h1>
+          <p class="subtitle">Professional AI Audiobook Generator</p>
+        </div>
+      </div>
+      <div class="topbar-status">
+        <span id="providerStatus" class="pill pill-muted">Checking narration engine…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel panel-main">
+        <div class="panel-header">
+          <h2>1. Source Book</h2>
+          <p>Import an ebook or text document. Supported formats: EPUB, MOBI, AZW3, TXT.</p>
+        </div>
+
+        <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Upload book file">
+          <input id="fileInput" type="file" accept=".epub,.mobi,.azw3,.txt" multiple hidden />
+          <div class="drop-zone-inner">
+            <div class="drop-icon">⬆</div>
+            <div class="drop-title">Drag & drop your book here</div>
+            <div class="drop-sub">or <button id="browseBtn" class="link-btn" type="button">browse files</button></div>
+            <div class="drop-hint">EPUB, MOBI, AZW3, TXT • Automatic language detection • Chapter recognition</div>
+          </div>
+        </div>
+        <div id="uploadError" class="alert alert-error hidden"></div>
+        <div id="uploadInfo" class="alert alert-info hidden"></div>
+
+        <div id="fileCard" class="file-card hidden">
+          <div class="file-meta">
+            <div class="file-name" id="fileName"></div>
+            <div class="file-details" id="fileDetails"></div>
+          </div>
+          <div class="file-actions">
+            <button id="replaceBtn" class="btn btn-secondary" type="button">Replace file</button>
+            <button id="removeBtn" class="btn btn-danger" type="button">Remove</button>
+          </div>
+        </div>
+
+        <div id="bookMeta" class="book-meta hidden">
+          <div class="grid-2">
+            <div class="field">
+              <label>Detected title</label>
+              <div id="bookTitle" class="value-box"></div>
+            </div>
+            <div class="field">
+              <label>Author</label>
+              <div id="bookAuthor" class="value-box"></div>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label>Detected language</label>
+              <div id="detectedLanguage" class="value-box"></div>
+            </div>
+            <div class="field">
+              <label for="languageOverride">Narration language (override)</label>
+              <select id="languageOverride" class="input">
+                <option value="en">English</option>
+                <option value="hu">Hungarian (Magyar)</option>
+              </select>
+              <div class="help-text">The app detects language from the book text. You can override it if needed.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header row-between">
+          <div>
+            <h2>2. Chapters & Content</h2>
+            <p>Select, reorder, and exclude sections before generating audio.</p>
+          </div>
+          <div class="chapter-actions">
+            <button id="selectAllBtn" class="btn btn-secondary btn-sm" type="button">Select all</button>
+            <button id="selectNoneBtn" class="btn btn-secondary btn-sm" type="button">Select none</button>
+          </div>
+        </div>
+        <div id="chaptersEmpty" class="empty-state">Upload a book to see extracted chapters.</div>
+        <div id="chaptersList" class="chapters-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>3. Narration Engine & Voice</h2>
+          <p>Choose an online or offline narration engine. Hungarian pronunciation is handled with language-specific voices.</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label for="providerSelect">Narration engine</label>
+            <select id="providerSelect" class="input"></select>
+            <div id="providerMeta" class="help-text"></div>
+          </div>
+          <div class="field">
+            <label for="voiceSelect">Voice</label>
+            <select id="voiceSelect" class="input"></select>
+            <div id="voiceMeta" class="help-text"></div>
+            <label for="dialogueVoiceSelect" style="margin-top:10px;">Dialogue voice (optional hook)</label>
+            <select id="dialogueVoiceSelect" class="input">
+              <option value="">Same as narrator voice</option>
+            </select>
+            <div class="help-text">Optionally use a different voice for detected dialogue segments (same narration engine/language).</div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label>Voice preview</label>
+            <div class="preview-row">
+              <button id="previewBtn" class="btn btn-secondary" type="button">▶ Preview voice</button>
+              <audio id="previewAudio" controls class="preview-audio hidden"></audio>
+            </div>
+            <div id="previewStatus" class="help-text"></div>
+          </div>
+          <div class="field">
+            <label>Engine status</label>
+            <div id="engineStatusBox" class="value-box">Select an engine to see details.</div>
+          </div>
+        </div>
+
+        <div class="grid-3">
+          <div class="field">
+            <label for="speedRange">Speech speed: <span id="speedValue">1.00×</span></label>
+            <input id="speedRange" type="range" min="0.7" max="1.4" step="0.05" value="1.0" />
+            <div class="help-text">1.00× is natural audiobook pace.</div>
+          </div>
+          <div class="field">
+            <label for="pitchRange">Pitch: <span id="pitchValue">0</span></label>
+            <input id="pitchRange" type="range" min="-6" max="6" step="0.5" value="0" />
+            <div id="pitchHelp" class="help-text">Adjust tone if supported by the engine.</div>
+          </div>
+          <div class="field">
+            <label for="styleSelect">Narration style</label>
+            <select id="styleSelect" class="input">
+              <option value="Natural Audiobook Narration" selected>Natural Audiobook Narration (recommended)</option>
+              <option value="Clear Narration">Clear Narration</option>
+            </select>
+            <div class="help-text">Prioritizes expressive, pleasant, human-like speech.</div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label for="toneProfileSelect">Dynamic tone profile</label>
+            <select id="toneProfileSelect" class="input">
+              <option value="natural" selected>Natural (recommended) — balanced dynamic narration</option>
+              <option value="expressive">Expressive — more dynamic title/dialogue tone (subtle)</option>
+              <option value="clear">Clear — steady, minimal tone variation</option>
+              <option value="neutral">Neutral — disable dynamic tone hints</option>
+            </select>
+            <div class="help-text">Provider-aware prosody hints for title/dialogue/paragraph segments (falls back safely per engine).</div>
+          </div>
+          <div class="field">
+            <label>Dynamic narration notes</label>
+            <div class="value-box">Structure-aware pauses and tone hints are applied automatically. Dialogue voice casting is optional and uses the selected narration engine when available.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="offlineModelsPanel">
+        <div class="panel-header row-between">
+          <div>
+            <h2>3b. Offline Voice Models (Piper)</h2>
+            <p>Download recommended offline voices for English and Hungarian. Once downloaded, they work without internet.</p>
+          </div>
+          <div class="chapter-actions">
+            <button id="refreshModelsBtn" class="btn btn-secondary btn-sm" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="model-filters">
+          <div class="field">
+            <label for="modelLanguageFilter">Language</label>
+            <select id="modelLanguageFilter" class="input">
+              <option value="current">Current narration language</option>
+              <option value="all">All languages</option>
+              <option value="en">English</option>
+              <option value="hu">Hungarian</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="modelGenderFilter">Voice type</label>
+            <select id="modelGenderFilter" class="input">
+              <option value="all">All (Male & Female)</option>
+              <option value="Female">Female</option>
+              <option value="Male">Male</option>
+            </select>
+          </div>
+          <div class="field model-filter-info">
+            <label>Models location</label>
+            <div id="modelsDirInfo" class="help-text">—</div>
+          </div>
+        </div>
+
+        <div id="offlineRuntimeNotice" class="alert alert-info hidden"></div>
+        <div id="offlineModelsList" class="models-list"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>4. Output & Audio Generation</h2>
+          <p>Generate high-quality audiobooks per chapter, with an optional combined edition. Choose MP3 or AAC (M4A) for iPhone.</p>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label for="outputDir">Output folder</label>
+            <input id="outputDir" class="input" type="text" placeholder="~/BookCoderAudiobooks/..." />
+            <div class="help-text">Chapter audio files and optional combined audiobook will be saved here.</div>
+          </div>
+          <div class="field">
+            <label for="outputFormat">Output format</label>
+            <select id="outputFormat" class="input">
+              <option value="mp3" selected>MP3 (.mp3) — widely compatible</option>
+              <option value="m4a">AAC (.m4a) — recommended for iPhone (direct copy)</option>
+            </select>
+            <div class="help-text">M4A (AAC) is ideal for copying directly to iPhone/Apple Books or Music.</div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="field">
+            <label for="bitrateSelect">Audio quality (bitrate)</label>
+            <select id="bitrateSelect" class="input">
+              <option value="128" selected>128 kbps (recommended audiobook quality)</option>
+              <option value="160">160 kbps</option>
+              <option value="192">192 kbps (high quality)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="pauseRange">Pause between chapters: <span id="pauseValue">1200 ms</span></label>
+            <input id="pauseRange" type="range" min="400" max="3000" step="100" value="1200" />
+            <div class="help-text">Adds natural silence between chapters in the combined audiobook.</div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="field checkbox-field">
+            <label><input id="combineChk" type="checkbox" /> Also combine all chapters into one audiobook file</label>
+            <div class="help-text">Creates a single complete audiobook file in addition to per-chapter files.</div>
+          </div>
+          <div class="field">
+            <label>iPhone tip</label>
+            <div class="value-box">For direct iPhone use, select <strong>AAC (.m4a)</strong> output, then copy the generated files to your device.</div>
+          </div>
+        </div>
+
+        <div class="generate-bar">
+          <button id="generateBtn" class="btn btn-primary btn-lg" type="button">Generate Audiobook</button>
+          <button id="cancelBtn" class="btn btn-danger btn-lg hidden" type="button">Cancel</button>
+        </div>
+
+        <div id="progressWrap" class="progress-wrap hidden">
+          <div class="progress-header">
+            <div id="progressStage" class="progress-stage">Preparing…</div>
+            <div id="progressPct" class="progress-pct">0%</div>
+          </div>
+          <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+          <div id="progressMessage" class="progress-message"></div>
+        </div>
+
+        <div id="resultBox" class="result-box hidden"></div>
+        <div id="genError" class="alert alert-error hidden"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>BookCoder generates natural-sounding audiobooks (MP3 or AAC/M4A) from EPUB, MOBI, AZW3, and TXT with English & Hungarian narration (online and offline models).</span>
+    </footer>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
