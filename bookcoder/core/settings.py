@@ -54,7 +54,20 @@ class SettingsStore:
             if isinstance(per, dict):
                 lang_data = per.get(language.value, {})
                 if isinstance(lang_data, dict):
+                    # Merge map fields (global base + per-language overrides)
+                    base_map = dict(ns.pronunciation_map or {})
+                    base_cast = dict(ns.voice_cast_map or {})
                     self._apply_dict(ns, lang_data)
+                    lang_map = dict(ns.pronunciation_map or {})
+                    lang_cast = dict(ns.voice_cast_map or {})
+                    if base_map or lang_map:
+                        merged = dict(base_map)
+                        merged.update(lang_map)
+                        ns.pronunciation_map = merged
+                    if base_cast or lang_cast:
+                        merged_cast = dict(base_cast)
+                        merged_cast.update(lang_cast)
+                        ns.voice_cast_map = merged_cast
             ns.language = language
         return ns
 
@@ -63,9 +76,13 @@ class SettingsStore:
         if not isinstance(self._data.get("narration"), dict):
             self._data["narration"] = {}
         # save general prefs
-        for k in ("provider_id", "speed", "pitch", "style", "volume_gain_db", "output_format", "output_bitrate_kbps", "combine_into_single_file", "chapter_pause_ms", "paragraph_pause_ms", "tone_profile"):
+        for k in ("provider_id", "speed", "pitch", "style", "volume_gain_db", "output_format", "output_bitrate_kbps", "combine_into_single_file", "chapter_pause_ms", "paragraph_pause_ms", "sentence_pause_hint", "tone_profile"):
             if k in payload:
                 self._data["narration"][k] = payload[k]
+        if "pronunciation_map" in payload and isinstance(payload["pronunciation_map"], dict):
+            self._data["narration"]["pronunciation_map"] = payload["pronunciation_map"]
+        if "voice_cast_map" in payload and isinstance(payload["voice_cast_map"], dict):
+            self._data["narration"]["voice_cast_map"] = payload["voice_cast_map"]
         # save per-language voice and related
         lang = language or settings.language
         if lang:
@@ -74,9 +91,13 @@ class SettingsStore:
             key = lang.value if hasattr(lang, "value") else str(lang)
             if not isinstance(self._data["narration_by_language"].get(key), dict):
                 self._data["narration_by_language"][key] = {}
-            for k in ("provider_id", "voice_id", "speed", "pitch", "style", "tone_profile", "dialogue_voice_id"):
+            for k in ("provider_id", "voice_id", "speed", "pitch", "style", "tone_profile", "dialogue_voice_id", "dialogue_voice_alt_id", "sentence_pause_hint"):
                 if k in payload and payload[k] not in (None, ""):
                     self._data["narration_by_language"][key][k] = payload[k]
+            if "pronunciation_map" in payload and isinstance(payload["pronunciation_map"], dict):
+                self._data["narration_by_language"][key]["pronunciation_map"] = payload["pronunciation_map"]
+            if "voice_cast_map" in payload and isinstance(payload["voice_cast_map"], dict):
+                self._data["narration_by_language"][key]["voice_cast_map"] = payload["voice_cast_map"]
         self.save()
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -140,6 +161,11 @@ class SettingsStore:
                 ns.paragraph_pause_ms = int(d["paragraph_pause_ms"])
             except Exception:
                 pass
+        if "sentence_pause_hint" in d:
+            try:
+                ns.sentence_pause_hint = bool(d["sentence_pause_hint"])
+            except Exception:
+                pass
         if "tone_profile" in d and isinstance(d["tone_profile"], str):
             tp = d["tone_profile"].strip().lower()
             if tp in ("natural", "expressive", "clear", "neutral"):
@@ -148,3 +174,27 @@ class SettingsStore:
                 ns.tone_profile = tp
         if "dialogue_voice_id" in d and isinstance(d["dialogue_voice_id"], str):
             ns.dialogue_voice_id = d["dialogue_voice_id"].strip()
+        if "dialogue_voice_alt_id" in d and isinstance(d["dialogue_voice_alt_id"], str):
+            ns.dialogue_voice_alt_id = d["dialogue_voice_alt_id"].strip()
+        if "voice_cast_map" in d and isinstance(d["voice_cast_map"], dict):
+            cleaned_cast: dict[str, str] = {}
+            for k, v in d["voice_cast_map"].items():
+                try:
+                    ks = str(k).strip().lower()
+                    vs = str(v).strip()
+                except Exception:
+                    continue
+                if ks and vs:
+                    cleaned_cast[ks] = vs
+            ns.voice_cast_map = cleaned_cast
+        if "pronunciation_map" in d and isinstance(d["pronunciation_map"], dict):
+            cleaned: dict[str, str] = {}
+            for k, v in d["pronunciation_map"].items():
+                try:
+                    ks = str(k).strip()
+                    vs = str(v).strip()
+                except Exception:
+                    continue
+                if ks and vs:
+                    cleaned[ks] = vs
+            ns.pronunciation_map = cleaned

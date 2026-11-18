@@ -124,6 +124,9 @@ class NarrationSettings:
     sentence_pause_hint: bool = True
     tone_profile: str = "natural"  # natural | expressive | clear | neutral
     dialogue_voice_id: str = ""  # optional hook: use a different voice for dialogue segments (same provider)
+    dialogue_voice_alt_id: str = ""  # optional hook: alternating/secondary dialogue voice for multi-speaker heuristics
+    voice_cast_map: dict[str, str] = field(default_factory=dict)  # extensible role->voice_id mapping (e.g. narrator/dialogue/dialogue_alt)
+    pronunciation_map: dict[str, str] = field(default_factory=dict)  # optional synthesis-time pronunciation overrides
 
 
 @dataclass

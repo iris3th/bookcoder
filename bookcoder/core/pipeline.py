@@ -136,6 +136,12 @@ class AudiobookPipeline:
             combine_into_single_file=config.combine,
             chapter_pause_ms=config.chapter_pause_ms,
             paragraph_pause_ms=settings.paragraph_pause_ms,
+            sentence_pause_hint=getattr(settings, "sentence_pause_hint", True),
+            tone_profile=getattr(settings, "tone_profile", "natural") or "natural",
+            dialogue_voice_id=(getattr(settings, "dialogue_voice_id", "") or "").strip(),
+            dialogue_voice_alt_id=(getattr(settings, "dialogue_voice_alt_id", "") or "").strip(),
+            voice_cast_map=dict(getattr(settings, "voice_cast_map", {}) or {}),
+            pronunciation_map=dict(getattr(settings, "pronunciation_map", {}) or {}),
         )
         if (effective_settings.style or "").lower().startswith("natural"):
             # gently bias extreme speeds toward natural range if user left default-ish; but respect explicit choices
@@ -200,16 +206,7 @@ class AudiobookPipeline:
             if not segments:
                 segments = [SpeechSegment(text=narration_text, pause_after_ms=0, speed_multiplier=1.0, pitch_delta=0.0, kind="text")]
 
-            dialogue_voice = voice
-            dialogue_voice_id = (getattr(effective_settings, "dialogue_voice_id", "") or "").strip()
-            if dialogue_voice_id and dialogue_voice_id != voice.id:
-                try:
-                    for dv in provider.list_voices(None):
-                        if dv.id == dialogue_voice_id:
-                            dialogue_voice = dv
-                            break
-                except Exception:
-                    dialogue_voice = voice
+            voice_cast = self._resolve_voice_cast(provider, voice, effective_settings)
 
             try:
                 self._synthesize_chapter_segments(
@@ -222,7 +219,7 @@ class AudiobookPipeline:
                     chapter_index=idx,
                     chapter_total=total,
                     progress=progress,
-                    dialogue_voice=dialogue_voice,
+                    voice_cast=voice_cast,
                 )
             except TTSProviderError as e:
                 self._cleanup_temp(out_dir)
@@ -336,6 +333,72 @@ class AudiobookPipeline:
 
         return result
 
+    def _resolve_voice_cast(self, provider: TTSProvider, narrator_voice, settings: NarrationSettings) -> dict[str, object]:
+        """Resolve role/kind voice-casting hooks to provider voices (best-effort)."""
+        cast: dict[str, object] = {"narrator": narrator_voice}
+
+        # Gather available voices once (provider may include downloaded/offline voices only)
+        voices = []
+        try:
+            voices = provider.list_voices(None) or []
+        except Exception:
+            try:
+                voices = provider.list_voices(getattr(settings, "language", None)) or []
+            except Exception:
+                voices = []
+        by_id = {getattr(v, "id", ""): v for v in voices if getattr(v, "id", "")}
+
+        def resolve_id(vid: str):
+            if not vid:
+                return None
+            v = by_id.get(vid)
+            if v is not None:
+                return v
+            # Fallback scan in case provider returned language-filtered subset unexpectedly
+            try:
+                for vv in provider.list_voices(None):
+                    if getattr(vv, "id", "") == vid:
+                        return vv
+            except Exception:
+                pass
+            return None
+
+        # Legacy/specific hooks
+        dialogue_id = (getattr(settings, "dialogue_voice_id", "") or "").strip()
+        dialogue_alt_id = (getattr(settings, "dialogue_voice_alt_id", "") or "").strip()
+        if dialogue_id:
+            dv = resolve_id(dialogue_id)
+            if dv is not None:
+                cast["dialogue"] = dv
+        if dialogue_alt_id:
+            dv2 = resolve_id(dialogue_alt_id)
+            if dv2 is not None:
+                cast["dialogue_alt"] = dv2
+
+        # Extensible map hook overrides/extends (e.g. narrator/dialogue/dialogue_alt/custom roles)
+        vmap = getattr(settings, "voice_cast_map", None)
+        if isinstance(vmap, dict):
+            for role, vid in vmap.items():
+                try:
+                    role_key = str(role or "").strip().lower()
+                    vid_str = str(vid or "").strip()
+                except Exception:
+                    continue
+                if not role_key or not vid_str:
+                    continue
+                rv = resolve_id(vid_str)
+                if rv is not None:
+                    cast[role_key] = rv
+
+        # Backward-compatible defaults
+        if "dialogue" not in cast and dialogue_id == "" and getattr(settings, "dialogue_voice_id", "") == "":
+            # no explicit dialogue voice: use narrator
+            cast["dialogue"] = narrator_voice
+        cast.setdefault("dialogue", narrator_voice)
+        cast.setdefault("dialogue_alt", cast.get("dialogue", narrator_voice))
+        cast.setdefault("narrator", narrator_voice)
+        return cast
+
     def _synthesize_chapter_segments(
         self,
         provider: TTSProvider,
@@ -348,10 +411,20 @@ class AudiobookPipeline:
         chapter_total: int,
         progress: Optional[ProgressCallback] = None,
         dialogue_voice=None,
+        voice_cast: Optional[dict] = None,
     ) -> None:
         """Synthesize planned segments and stitch them into a single chapter MP3 (raw)."""
-        if dialogue_voice is None:
-            dialogue_voice = voice
+        if voice_cast is None:
+            voice_cast = {}
+        if dialogue_voice is not None and "dialogue" not in voice_cast:
+            voice_cast = dict(voice_cast)
+            voice_cast["dialogue"] = dialogue_voice
+        # Ensure defaults
+        if "narrator" not in voice_cast:
+            voice_cast["narrator"] = voice
+        voice_cast.setdefault("dialogue", voice)
+        voice_cast.setdefault("dialogue_alt", voice_cast.get("dialogue", voice))
+
         # Collect spoken segments and initial pause
         initial_pause_ms = 0
         spoken: list[tuple[int, SpeechSegment]] = []  # (segment_order_index, seg)
@@ -377,7 +450,7 @@ class AudiobookPipeline:
                     span = 1 / max(chapter_total, 1)
                     frac = base + span * (si / max(total_spoken, 1))
                     kind = getattr(seg, "kind", "text")
-                    label = "title" if kind == "title" else ("dialogue" if kind == "dialogue" else "segment")
+                    label = "title" if kind == "title" else ("dialogue" if kind in ("dialogue", "dialogue_alt") else "segment")
                     progress(
                         ProgressUpdate(
                             stage="synthesize",
@@ -394,7 +467,7 @@ class AudiobookPipeline:
                     getattr(seg, "speed_multiplier", 1.0),
                     getattr(seg, "pitch_delta", 0.0),
                 )
-                seg_voice = dialogue_voice if getattr(seg, "kind", "") == "dialogue" and dialogue_voice is not None else voice
+                seg_voice = self._select_voice_for_segment(seg, voice_cast, default_voice=voice)
                 seg_path = tdir / f"seg_{si:04d}.mp3"
 
                 # Provider-internal chunk progress mapped into this segment's slice
@@ -457,6 +530,28 @@ class AudiobookPipeline:
 
         if not raw_path.exists() or raw_path.stat().st_size == 0:
             raise PipelineError(f"Generated audio for chapter '{chapter.title}' is missing or empty.")
+
+    def _select_voice_for_segment(self, seg: SpeechSegment, voice_cast: dict, default_voice):
+        # Prefer explicit cast role (set by segmentation heuristics/hooks), then kind fallbacks.
+        role = (getattr(seg, "cast_role", "") or "").strip().lower()
+        kind = (getattr(seg, "kind", "") or "").strip().lower()
+        candidates = []
+        if role:
+            candidates.append(role)
+        if kind:
+            candidates.append(kind)
+            if kind == "dialogue_alt":
+                candidates.extend(["dialogue", "narrator"])
+            elif kind == "dialogue":
+                candidates.extend(["dialogue_alt", "narrator"])
+            elif kind == "title":
+                candidates.extend(["narrator"])
+        candidates.extend(["narrator", "dialogue"])
+        for key in candidates:
+            v = voice_cast.get(key)
+            if v is not None:
+                return v
+        return default_voice
 
     def _stitch_segment_audio(
         self,

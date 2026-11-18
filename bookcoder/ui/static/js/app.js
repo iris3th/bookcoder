@@ -14,6 +14,7 @@
     pendingFiles: [],
     busy: false,
     downloadPollTimer: null,
+    chaptersExpanded: false,
   };
 
   // Elements
@@ -36,6 +37,9 @@
   const chaptersEmpty = $("chaptersEmpty");
   const selectAllBtn = $("selectAllBtn");
   const selectNoneBtn = $("selectNoneBtn");
+  const toggleChaptersBtn = $("toggleChaptersBtn");
+  const chaptersBody = $("chaptersBody");
+  const chaptersSummary = $("chaptersSummary");
 
   const providerSelect = $("providerSelect");
   const providerMeta = $("providerMeta");
@@ -54,6 +58,15 @@
   const styleSelect = $("styleSelect");
   const toneProfileSelect = $("toneProfileSelect");
   const dialogueVoiceSelect = $("dialogueVoiceSelect");
+  const dialogueVoiceAltSelect = $("dialogueVoiceAltSelect");
+  const paragraphPauseRange = $("paragraphPauseRange");
+  const paragraphPauseValue = $("paragraphPauseValue");
+  const sentencePauseChk = $("sentencePauseChk");
+  const pronunciationMapInput = $("pronunciationMapInput");
+  const pronunciationPresetSelect = $("pronunciationPresetSelect");
+  const pronunciationExportBtn = $("pronunciationExportBtn");
+  const pronunciationImportBtn = $("pronunciationImportBtn");
+  const pronunciationImportFile = $("pronunciationImportFile");
 
   const outputDir = $("outputDir");
   const outputFormat = $("outputFormat");
@@ -120,9 +133,11 @@
     speedRange.addEventListener("input", updateRangeLabels);
     pitchRange.addEventListener("input", updateRangeLabels);
     pauseRange.addEventListener("input", updateRangeLabels);
+    if (paragraphPauseRange) paragraphPauseRange.addEventListener("input", updateRangeLabels);
 
     selectAllBtn.addEventListener("click", () => setAllChapters(true));
     selectNoneBtn.addEventListener("click", () => setAllChapters(false));
+    if (toggleChaptersBtn) toggleChaptersBtn.addEventListener("click", () => setChaptersExpanded(!state.chaptersExpanded));
 
     generateBtn.addEventListener("click", () => startGeneration());
     cancelBtn.addEventListener("click", () => cancelGeneration());
@@ -131,10 +146,23 @@
     modelLanguageFilter.addEventListener("change", () => loadOfflineModels());
     modelGenderFilter.addEventListener("change", () => renderOfflineModels());
 
-    [speedRange, pitchRange, styleSelect, toneProfileSelect, dialogueVoiceSelect, outputFormat, bitrateSelect, combineChk, pauseRange, outputDir].forEach(el => {
+    [speedRange, pitchRange, styleSelect, toneProfileSelect, dialogueVoiceSelect, dialogueVoiceAltSelect, paragraphPauseRange, sentencePauseChk, pronunciationMapInput, outputFormat, bitrateSelect, combineChk, pauseRange, outputDir].forEach(el => {
       if (!el) return;
       el.addEventListener("change", () => saveSettings());
     });
+
+    if (pronunciationPresetSelect) {
+      pronunciationPresetSelect.addEventListener("change", () => {
+        applyPronunciationPreset(pronunciationPresetSelect.value);
+        pronunciationPresetSelect.value = "";
+        saveSettings();
+      });
+    }
+    if (pronunciationExportBtn) pronunciationExportBtn.addEventListener("click", () => exportPronunciationMap());
+    if (pronunciationImportBtn && pronunciationImportFile) {
+      pronunciationImportBtn.addEventListener("click", () => pronunciationImportFile.click());
+      pronunciationImportFile.addEventListener("change", () => importPronunciationMapFile(pronunciationImportFile.files && pronunciationImportFile.files[0]));
+    }
   }
 
   function updateRangeLabels() {
@@ -142,6 +170,121 @@
     const p = parseFloat(pitchRange.value);
     pitchValue.textContent = (p > 0 ? "+" : "") + p;
     pauseValue.textContent = `${pauseRange.value} ms`;
+    if (paragraphPauseRange && paragraphPauseValue) {
+      paragraphPauseValue.textContent = `${paragraphPauseRange.value} ms`;
+    }
+  }
+
+  function parsePronunciationMapText(text) {
+    const map = {};
+    const lines = String(text || "").split(/\r?\n/);
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      let idx = line.indexOf('=>');
+      let sepLen = 2;
+      if (idx === -1) { idx = line.indexOf('='); sepLen = 1; }
+      if (idx === -1) continue;
+      const from = line.slice(0, idx).trim();
+      const to = line.slice(idx + sepLen).trim();
+      if (from && to) map[from] = to;
+    }
+    return map;
+  }
+
+  function formatPronunciationMapText(map) {
+    if (!map || typeof map !== 'object') return '';
+    return Object.entries(map)
+      .filter(([k, v]) => String(k || '').trim() && String(v || '').trim())
+      .map(([k, v]) => `${String(k).trim()} = ${String(v).trim()}`)
+      .join('\n');
+  }
+
+  function getBuiltInPronunciationPresets() {
+    return {
+      'en-tech': {
+        'SQL': 'sequel',
+        'GUI': 'gooey',
+        'CLI': 'command line interface',
+        'API': 'A P I',
+        'URL': 'U R L',
+        'CPU': 'C P U',
+        'GPU': 'G P U',
+      },
+      'en-names': {
+        'Dr.': 'Doctor',
+        'Mr.': 'Mister',
+        'Mrs.': 'Misses',
+        'St.': 'Saint',
+      },
+      'hu-names': {
+        'dr.': 'doktor',
+        'Dr.': 'Doktor',
+        'kb.': 'körülbelül',
+        'stb.': 's a többi',
+      },
+    };
+  }
+
+  function applyPronunciationPreset(key) {
+    if (!key) return;
+    if (key === 'clear') {
+      if (pronunciationMapInput) pronunciationMapInput.value = '';
+      return;
+    }
+    const presets = getBuiltInPronunciationPresets();
+    const preset = presets[key];
+    if (!preset || !pronunciationMapInput) return;
+    const current = parsePronunciationMapText(pronunciationMapInput.value);
+    const merged = Object.assign({}, current, preset);
+    pronunciationMapInput.value = formatPronunciationMapText(merged);
+  }
+
+  function exportPronunciationMap() {
+    if (!pronunciationMapInput) return;
+    const map = parsePronunciationMapText(pronunciationMapInput.value);
+    const json = JSON.stringify(map, null, 2);
+    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'bookcoder-pronunciation-map.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function importPronunciationMapFile(file) {
+    if (!file || !pronunciationMapInput) return;
+    try {
+      const text = await file.text();
+      let imported = {};
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          imported = parsed;
+        } else {
+          throw new Error('JSON must be an object map');
+        }
+      } catch (e) {
+        // Fallback: parse as line-based "from = to" text
+        imported = parsePronunciationMapText(text);
+      }
+      const cleaned = {};
+      for (const [k, v] of Object.entries(imported || {})) {
+        const ks = String(k || '').trim();
+        const vs = String(v || '').trim();
+        if (ks && vs) cleaned[ks] = vs;
+      }
+      const current = parsePronunciationMapText(pronunciationMapInput.value);
+      pronunciationMapInput.value = formatPronunciationMapText(Object.assign({}, current, cleaned));
+      await saveSettings();
+    } catch (e) {
+      showGenError(`Failed to import pronunciation map: ${e.message || e}`);
+    } finally {
+      if (pronunciationImportFile) pronunciationImportFile.value = '';
+    }
   }
 
   async function loadInitialSettings() {
@@ -329,6 +472,8 @@
       state.book = res.book;
       state.file = res.file;
       renderBook();
+      setSuggestedOutputDirForBook(res.book, res.file);
+      setChaptersExpanded(false); // collapse by default for newly loaded books (especially long ones)
       if (res.settings) {
         applySettings(res.settings);
         if (res.settings.provider_id && (state.providers || []).some(p => p.id === res.settings.provider_id)) {
@@ -358,6 +503,8 @@
       bookMeta.classList.add('hidden');
       chaptersList.innerHTML = '';
       chaptersEmpty.classList.remove('hidden');
+      updateChaptersSummary();
+      setChaptersExpanded(false);
       return;
     }
     fileCard.classList.remove('hidden');
@@ -372,11 +519,17 @@
     languageOverride.value = sel;
 
     if (!outputDir.value) {
-      const safe = (book.title || book.filename || 'Audiobook').replace(/[^\w\s\-\.]/g, '').trim() || 'Audiobook';
-      outputDir.value = `~/BookCoderAudiobooks/${safe}`;
+      setSuggestedOutputDirForBook(book, file);
     }
 
     renderChapters();
+  }
+
+  function setSuggestedOutputDirForBook(book, file) {
+    if (!outputDir) return;
+    const baseName = (book && (book.title || book.filename)) || (file && file.filename) || 'Audiobook';
+    const safe = String(baseName).replace(/[^\w\s\-\.]/g, '').replace(/\s+/g, ' ').trim() || 'Audiobook';
+    outputDir.value = `~/BookCoderAudiobooks/${safe}`;
   }
 
   function renderChapters() {
@@ -384,6 +537,7 @@
     if (!book || !book.chapters || !book.chapters.length) {
       chaptersList.innerHTML = '';
       chaptersEmpty.classList.remove('hidden');
+      updateChaptersSummary();
       return;
     }
     chaptersEmpty.classList.add('hidden');
@@ -398,7 +552,7 @@
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = !!ch.included;
-      cb.addEventListener('change', () => { ch.included = cb.checked; item.classList.toggle('excluded', !ch.included); });
+      cb.addEventListener('change', () => { ch.included = cb.checked; item.classList.toggle('excluded', !ch.included); updateChaptersSummary(); });
       checkWrap.appendChild(cb);
 
       const body = document.createElement('div');
@@ -430,6 +584,29 @@
       item.appendChild(controls);
       chaptersList.appendChild(item);
     });
+    updateChaptersSummary();
+  }
+
+  function setChaptersExpanded(expanded) {
+    state.chaptersExpanded = !!expanded;
+    if (chaptersBody) chaptersBody.classList.toggle('hidden', !state.chaptersExpanded);
+    if (toggleChaptersBtn) {
+      toggleChaptersBtn.textContent = state.chaptersExpanded ? 'Hide chapters ▴' : 'Show chapters ▾';
+      toggleChaptersBtn.setAttribute('aria-expanded', state.chaptersExpanded ? 'true' : 'false');
+    }
+  }
+
+  function updateChaptersSummary() {
+    if (!chaptersSummary) return;
+    const book = state.book;
+    if (!book || !Array.isArray(book.chapters) || book.chapters.length === 0) {
+      chaptersSummary.textContent = 'Upload a book to see extracted chapters. Chapters are collapsed to keep settings easy to reach.';
+      return;
+    }
+    const total = book.chapters.length;
+    const selected = book.chapters.filter(c => c && c.included).length;
+    const words = book.chapters.filter(c => c && c.included).reduce((sum, c) => sum + (c.word_count || 0), 0);
+    chaptersSummary.textContent = `${total} chapter${total === 1 ? '' : 's'} extracted • ${selected} selected${words ? ` • ~${words.toLocaleString()} words` : ''}. Click "Show chapters" to review, reorder, or exclude.`;
   }
 
   function moveChapter(index, delta) {
@@ -517,6 +694,7 @@
     const voices = state.voices || [];
     const current = voiceSelect.value;
     const currentDialogue = dialogueVoiceSelect ? dialogueVoiceSelect.value : '';
+    const currentDialogueAlt = dialogueVoiceAltSelect ? dialogueVoiceAltSelect.value : '';
 
     voiceSelect.innerHTML = '';
     if (dialogueVoiceSelect) {
@@ -525,6 +703,13 @@
       sameOpt.value = '';
       sameOpt.textContent = 'Same as narrator voice';
       dialogueVoiceSelect.appendChild(sameOpt);
+    }
+    if (dialogueVoiceAltSelect) {
+      dialogueVoiceAltSelect.innerHTML = '';
+      const sameAltOpt = document.createElement('option');
+      sameAltOpt.value = '';
+      sameAltOpt.textContent = 'Same as dialogue voice';
+      dialogueVoiceAltSelect.appendChild(sameAltOpt);
     }
 
     if (!voices.length) {
@@ -536,6 +721,12 @@
         opt.textContent = 'No voices available';
       }
       voiceSelect.appendChild(opt);
+      if (dialogueVoiceAltSelect) {
+        const altEmpty = document.createElement('option');
+        altEmpty.value = '';
+        altEmpty.textContent = 'No voices available';
+        dialogueVoiceAltSelect.appendChild(altEmpty);
+      }
       updateVoiceMeta();
       return;
     }
@@ -547,11 +738,8 @@
       groups[g].push(v);
     });
 
-    const appendGroupedOptions = (selectEl, includeSame) => {
+    const appendGroupedOptions = (selectEl) => {
       if (!selectEl) return;
-      if (includeSame) {
-        // already added "Same as narrator voice"
-      }
       for (const [label, list] of Object.entries(groups)) {
         if (!list.length) continue;
         const og = document.createElement('optgroup');
@@ -566,8 +754,9 @@
       }
     };
 
-    appendGroupedOptions(voiceSelect, false);
-    appendGroupedOptions(dialogueVoiceSelect, true);
+    appendGroupedOptions(voiceSelect);
+    appendGroupedOptions(dialogueVoiceSelect);
+    appendGroupedOptions(dialogueVoiceAltSelect);
 
     if (current && voices.some(v => v.id === current)) {
       voiceSelect.value = current;
@@ -590,6 +779,18 @@
         dialogueVoiceSelect.value = currentDialogue;
       } else {
         dialogueVoiceSelect.value = '';
+      }
+    }
+
+    if (dialogueVoiceAltSelect) {
+      const pendingDialogueAlt = state._pendingDialogueVoiceAltId;
+      if (pendingDialogueAlt && voices.some(v => v.id === pendingDialogueAlt)) {
+        dialogueVoiceAltSelect.value = pendingDialogueAlt;
+        state._pendingDialogueVoiceAltId = null;
+      } else if (currentDialogueAlt && voices.some(v => v.id === currentDialogueAlt)) {
+        dialogueVoiceAltSelect.value = currentDialogueAlt;
+      } else {
+        dialogueVoiceAltSelect.value = '';
       }
     }
 
@@ -898,12 +1099,16 @@
       style: styleSelect.value,
       tone_profile: toneProfileSelect ? toneProfileSelect.value : 'natural',
       dialogue_voice_id: dialogueVoiceSelect ? dialogueVoiceSelect.value : '',
+      dialogue_voice_alt_id: dialogueVoiceAltSelect ? dialogueVoiceAltSelect.value : '',
+      voice_cast_map: buildVoiceCastMap(),
+      paragraph_pause_ms: paragraphPauseRange ? (parseInt(paragraphPauseRange.value, 10) || 450) : ((state.settings && typeof state.settings.paragraph_pause_ms === 'number') ? state.settings.paragraph_pause_ms : 450),
+      sentence_pause_hint: sentencePauseChk ? !!sentencePauseChk.checked : ((state.settings && typeof state.settings.sentence_pause_hint === 'boolean') ? state.settings.sentence_pause_hint : true),
+      pronunciation_map: pronunciationMapInput ? parsePronunciationMapText(pronunciationMapInput.value) : ((state.settings && state.settings.pronunciation_map) || {}),
       output_dir: outputDir.value,
       output_format: (outputFormat && outputFormat.value) ? outputFormat.value : 'mp3',
       bitrate_kbps: parseInt(bitrateSelect.value, 10) || 128,
       combine: !!combineChk.checked,
       chapter_pause_ms: parseInt(pauseRange.value, 10) || 1200,
-      paragraph_pause_ms: (state.settings && typeof state.settings.paragraph_pause_ms === 'number') ? state.settings.paragraph_pause_ms : 450,
       chapters: state.book.chapters.map(c => ({ id: c.id, included: !!c.included })),
     };
 
@@ -1055,8 +1260,24 @@
     }
   }
 
+  function buildVoiceCastMap() {
+    const narrator = voiceSelect ? voiceSelect.value : '';
+    const dialogue = dialogueVoiceSelect ? dialogueVoiceSelect.value : '';
+    const dialogueAlt = dialogueVoiceAltSelect ? dialogueVoiceAltSelect.value : '';
+    const map = {};
+    if (narrator) map.narrator = narrator;
+    if (dialogue) map.dialogue = dialogue;
+    if (dialogueAlt) map.dialogue_alt = dialogueAlt;
+    // also keep legacy-friendly alias if both are set
+    return map;
+  }
+
   async function saveSettings() {
     try {
+      const paragraphPauseMs = paragraphPauseRange ? (parseInt(paragraphPauseRange.value, 10) || 450) : ((state.settings && typeof state.settings.paragraph_pause_ms === 'number') ? state.settings.paragraph_pause_ms : 450);
+      const sentencePauseHint = sentencePauseChk ? !!sentencePauseChk.checked : ((state.settings && typeof state.settings.sentence_pause_hint === 'boolean') ? state.settings.sentence_pause_hint : true);
+      const pronunciationMap = pronunciationMapInput ? parsePronunciationMapText(pronunciationMapInput.value) : ((state.settings && state.settings.pronunciation_map) || {});
+      const voiceCastMap = buildVoiceCastMap();
       const settings = {
         provider_id: state.selectedProviderId,
         language: getEffectiveLanguage(),
@@ -1066,11 +1287,15 @@
         style: styleSelect.value,
         tone_profile: toneProfileSelect ? toneProfileSelect.value : 'natural',
         dialogue_voice_id: dialogueVoiceSelect ? dialogueVoiceSelect.value : '',
+        dialogue_voice_alt_id: dialogueVoiceAltSelect ? dialogueVoiceAltSelect.value : '',
+        voice_cast_map: voiceCastMap,
+        paragraph_pause_ms: paragraphPauseMs,
+        sentence_pause_hint: sentencePauseHint,
+        pronunciation_map: pronunciationMap,
         output_format: (outputFormat && outputFormat.value) ? outputFormat.value : 'mp3',
         output_bitrate_kbps: parseInt(bitrateSelect.value, 10) || 128,
         combine_into_single_file: !!combineChk.checked,
         chapter_pause_ms: parseInt(pauseRange.value, 10) || 1200,
-        paragraph_pause_ms: (state.settings && typeof state.settings.paragraph_pause_ms === 'number') ? state.settings.paragraph_pause_ms : 450,
         last_output_dir: outputDir.value,
       };
       await fetchJSON('/api/settings', { method: 'POST', body: settings });
@@ -1085,6 +1310,9 @@
     if (typeof s.pitch === 'number') pitchRange.value = s.pitch;
     if (s.style) styleSelect.value = s.style;
     if (s.tone_profile && toneProfileSelect) toneProfileSelect.value = s.tone_profile;
+    if (typeof s.paragraph_pause_ms === 'number' && paragraphPauseRange) paragraphPauseRange.value = s.paragraph_pause_ms;
+    if (typeof s.sentence_pause_hint === 'boolean' && sentencePauseChk) sentencePauseChk.checked = s.sentence_pause_hint;
+    if (s.pronunciation_map && pronunciationMapInput) pronunciationMapInput.value = formatPronunciationMapText(s.pronunciation_map);
     if (s.output_format && outputFormat) {
       const fmt = String(s.output_format).toLowerCase();
       outputFormat.value = (fmt === 'm4a' || fmt === 'aac' || fmt === 'mp4') ? 'm4a' : 'mp3';
@@ -1101,6 +1329,11 @@
     // voice/dialogue voice will be applied after voices load; store temporarily
     if (s.voice_id) state._pendingVoiceId = s.voice_id;
     if (typeof s.dialogue_voice_id === 'string') state._pendingDialogueVoiceId = s.dialogue_voice_id;
+    if (typeof s.dialogue_voice_alt_id === 'string') state._pendingDialogueVoiceAltId = s.dialogue_voice_alt_id;
+    if (s.voice_cast_map && typeof s.voice_cast_map === 'object') {
+      if (!state._pendingDialogueVoiceId && s.voice_cast_map.dialogue) state._pendingDialogueVoiceId = s.voice_cast_map.dialogue;
+      if (!state._pendingDialogueVoiceAltId && s.voice_cast_map.dialogue_alt) state._pendingDialogueVoiceAltId = s.voice_cast_map.dialogue_alt;
+    }
     updateRangeLabels();
   }
 

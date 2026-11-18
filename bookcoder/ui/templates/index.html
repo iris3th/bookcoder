@@ -83,15 +83,23 @@
         <div class="panel-header row-between">
           <div>
             <h2>2. Chapters & Content</h2>
-            <p>Select, reorder, and exclude sections before generating audio.</p>
+            <p id="chaptersSummary">Select, reorder, and exclude sections before generating audio. Chapters are collapsed to keep settings easy to reach.</p>
           </div>
           <div class="chapter-actions">
-            <button id="selectAllBtn" class="btn btn-secondary btn-sm" type="button">Select all</button>
-            <button id="selectNoneBtn" class="btn btn-secondary btn-sm" type="button">Select none</button>
+            <button id="toggleChaptersBtn" class="btn btn-secondary btn-sm" type="button" aria-expanded="false">Show chapters ▾</button>
           </div>
         </div>
-        <div id="chaptersEmpty" class="empty-state">Upload a book to see extracted chapters.</div>
-        <div id="chaptersList" class="chapters-list"></div>
+        <div id="chaptersBody" class="hidden">
+          <div class="chapters-toolbar row-between" style="margin-bottom:10px; align-items:center;">
+            <div class="help-text" style="margin:0;">Expand to review, include/exclude, and reorder chapters.</div>
+            <div class="chapter-actions">
+              <button id="selectAllBtn" class="btn btn-secondary btn-sm" type="button">Select all</button>
+              <button id="selectNoneBtn" class="btn btn-secondary btn-sm" type="button">Select none</button>
+            </div>
+          </div>
+          <div id="chaptersEmpty" class="empty-state">Upload a book to see extracted chapters.</div>
+          <div id="chaptersList" class="chapters-list"></div>
+        </div>
       </section>
 
       <section class="panel">
@@ -114,7 +122,12 @@
             <select id="dialogueVoiceSelect" class="input">
               <option value="">Same as narrator voice</option>
             </select>
-            <div class="help-text">Optionally use a different voice for detected dialogue segments (same narration engine/language).</div>
+            <div class="help-text">Optionally use a different voice for detected/quoted dialogue segments (same narration engine/language).</div>
+            <label for="dialogueVoiceAltSelect" style="margin-top:10px;">Alternate dialogue voice (multi-voice hook)</label>
+            <select id="dialogueVoiceAltSelect" class="input">
+              <option value="">Same as dialogue voice</option>
+            </select>
+            <div class="help-text">Optional second voice for alternating quoted speakers (intra-paragraph heuristic). Falls back safely when unavailable.</div>
           </div>
         </div>
 
@@ -166,9 +179,34 @@
             <div class="help-text">Provider-aware prosody hints for title/dialogue/paragraph segments (falls back safely per engine).</div>
           </div>
           <div class="field">
-            <label>Dynamic narration notes</label>
-            <div class="value-box">Structure-aware pauses and tone hints are applied automatically. Dialogue voice casting is optional and uses the selected narration engine when available.</div>
+            <label for="paragraphPauseRange">Paragraph pause: <span id="paragraphPauseValue">450 ms</span></label>
+            <input id="paragraphPauseRange" type="range" min="100" max="2000" step="50" value="450" />
+            <div class="help-text">Controls pauses between paragraphs/sections during synthesis (structure-aware narration).</div>
+            <div class="checkbox-field" style="margin-top:10px;">
+              <label><input id="sentencePauseChk" type="checkbox" checked /> Add subtle sentence/chunk pauses inside paragraphs</label>
+            </div>
+            <div class="help-text">Helps articulation for long blocks and quote-split narration; can be disabled for tighter pacing.</div>
           </div>
+        </div>
+
+        <div class="field">
+          <div class="row-between" style="gap:12px; align-items:flex-end; margin-bottom:6px;">
+            <label for="pronunciationMapInput" style="margin:0;">Pronunciation dictionary (optional)</label>
+            <div class="chapter-actions" style="flex-wrap:wrap;">
+              <select id="pronunciationPresetSelect" class="input" style="min-width:220px;">
+                <option value="">Presets: choose…</option>
+                <option value="en-tech">English tech acronyms</option>
+                <option value="en-names">English names/titles sample</option>
+                <option value="hu-names">Hungarian names/titles sample</option>
+                <option value="clear">Clear dictionary</option>
+              </select>
+              <button id="pronunciationExportBtn" class="btn btn-secondary btn-sm" type="button">Export JSON</button>
+              <button id="pronunciationImportBtn" class="btn btn-secondary btn-sm" type="button">Import JSON</button>
+              <input id="pronunciationImportFile" type="file" accept=".json,application/json,.txt,text/plain" hidden />
+            </div>
+          </div>
+          <textarea id="pronunciationMapInput" class="input" rows="5" placeholder="SQL = sequel&#10;GIF = jif&#10;Dr. Kovács = Doctor Kovách"></textarea>
+          <div class="help-text">One entry per line: <code>from = to</code> or <code>from =&gt; to</code>. Applied before synthesis to improve names/acronyms. Import/export uses JSON map format (<code>{"from":"to"}</code>), merge-on-import.</div>
         </div>
       </section>
 
@@ -237,6 +275,8 @@
           <div class="field">
             <label for="bitrateSelect">Audio quality (bitrate)</label>
             <select id="bitrateSelect" class="input">
+              <option value="64">64 kbps (smallest files, lower quality)</option>
+              <option value="96">96 kbps (small files)</option>
               <option value="128" selected>128 kbps (recommended audiobook quality)</option>
               <option value="160">160 kbps</option>
               <option value="192">192 kbps (high quality)</option>

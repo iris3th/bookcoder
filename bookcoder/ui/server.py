@@ -490,7 +490,7 @@ def create_app() -> Flask:
         style = payload.get("style") or "Natural Audiobook Narration"
         output_format = normalize_output_format(payload.get("output_format") or payload.get("format") or "mp3")
         bitrate = int(_to_float(payload.get("bitrate_kbps"), 128))
-        bitrate = 128 if bitrate < 128 else min(bitrate, 320)
+        bitrate = 64 if bitrate < 64 else min(bitrate, 320)
         combine = bool(payload.get("combine", False))
         pause_ms = int(_to_float(payload.get("chapter_pause_ms"), 1200))
 
@@ -509,12 +509,40 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": f"Cannot create output directory '{out_dir}': {e}"}), 400
 
         paragraph_pause_ms = int(_to_float(payload.get("paragraph_pause_ms"), 450))
+        sentence_pause_hint = payload.get("sentence_pause_hint", True)
+        if isinstance(sentence_pause_hint, str):
+            sentence_pause_hint = sentence_pause_hint.strip().lower() not in ("0", "false", "no", "off")
+        else:
+            sentence_pause_hint = bool(sentence_pause_hint)
         tone_profile = (payload.get("tone_profile") or "natural")
         if isinstance(tone_profile, str):
             tone_profile = tone_profile.strip().lower() or "natural"
         else:
             tone_profile = "natural"
         dialogue_voice_id = (payload.get("dialogue_voice_id") or "").strip()
+        dialogue_voice_alt_id = (payload.get("dialogue_voice_alt_id") or "").strip()
+        pronunciation_map = payload.get("pronunciation_map") if isinstance(payload.get("pronunciation_map"), dict) else {}
+        cleaned_pm = {}
+        if isinstance(pronunciation_map, dict):
+            for k, v in pronunciation_map.items():
+                try:
+                    ks = str(k).strip()
+                    vs = str(v).strip()
+                except Exception:
+                    continue
+                if ks and vs:
+                    cleaned_pm[ks] = vs
+        voice_cast_map = payload.get("voice_cast_map") if isinstance(payload.get("voice_cast_map"), dict) else {}
+        cleaned_vcm = {}
+        if isinstance(voice_cast_map, dict):
+            for k, v in voice_cast_map.items():
+                try:
+                    ks = str(k).strip().lower()
+                    vs = str(v).strip()
+                except Exception:
+                    continue
+                if ks and vs:
+                    cleaned_vcm[ks] = vs
 
         ns = NarrationSettings(
             provider_id=provider.id,
@@ -528,8 +556,12 @@ def create_app() -> Flask:
             combine_into_single_file=combine,
             chapter_pause_ms=max(0, min(pause_ms, 10000)),
             paragraph_pause_ms=max(0, min(paragraph_pause_ms, 5000)),
+            sentence_pause_hint=sentence_pause_hint,
             tone_profile=tone_profile if tone_profile in ("natural", "expressive", "clear", "neutral") else "natural",
             dialogue_voice_id=dialogue_voice_id,
+            dialogue_voice_alt_id=dialogue_voice_alt_id,
+            voice_cast_map=cleaned_vcm,
+            pronunciation_map=cleaned_pm,
         )
         state.settings_store.save_narration_settings(ns, lang)
         state.settings_store.set("last_output_dir", str(out_dir))
@@ -813,8 +845,12 @@ def _settings_to_json(ns: NarrationSettings) -> dict:
         "combine_into_single_file": ns.combine_into_single_file,
         "chapter_pause_ms": ns.chapter_pause_ms,
         "paragraph_pause_ms": ns.paragraph_pause_ms,
+        "sentence_pause_hint": bool(getattr(ns, "sentence_pause_hint", True)),
         "tone_profile": getattr(ns, "tone_profile", "natural") or "natural",
         "dialogue_voice_id": getattr(ns, "dialogue_voice_id", "") or "",
+        "dialogue_voice_alt_id": getattr(ns, "dialogue_voice_alt_id", "") or "",
+        "voice_cast_map": getattr(ns, "voice_cast_map", {}) or {},
+        "pronunciation_map": getattr(ns, "pronunciation_map", {}) or {},
     }
 
 
@@ -835,11 +871,39 @@ def _settings_from_json(d: dict) -> NarrationSettings:
     ns.combine_into_single_file = bool(d.get("combine_into_single_file", False))
     ns.chapter_pause_ms = int(_to_float(d.get("chapter_pause_ms"), 1200))
     ns.paragraph_pause_ms = int(_to_float(d.get("paragraph_pause_ms"), 450))
+    if "sentence_pause_hint" in d:
+        ns.sentence_pause_hint = bool(d.get("sentence_pause_hint"))
     if isinstance(d.get("tone_profile"), str) and d.get("tone_profile").strip():
         tp = d.get("tone_profile").strip().lower()
         ns.tone_profile = tp if tp in ("natural", "expressive", "clear", "neutral") else tp
     if isinstance(d.get("dialogue_voice_id"), str):
         ns.dialogue_voice_id = d.get("dialogue_voice_id").strip()
+    if isinstance(d.get("dialogue_voice_alt_id"), str):
+        ns.dialogue_voice_alt_id = d.get("dialogue_voice_alt_id").strip()
+    vcm = d.get("voice_cast_map")
+    if isinstance(vcm, dict):
+        cleaned_cast = {}
+        for k, v in vcm.items():
+            try:
+                ks = str(k).strip().lower()
+                vs = str(v).strip()
+            except Exception:
+                continue
+            if ks and vs:
+                cleaned_cast[ks] = vs
+        ns.voice_cast_map = cleaned_cast
+    pm = d.get("pronunciation_map")
+    if isinstance(pm, dict):
+        cleaned = {}
+        for k, v in pm.items():
+            try:
+                ks = str(k).strip()
+                vs = str(v).strip()
+            except Exception:
+                continue
+            if ks and vs:
+                cleaned[ks] = vs
+        ns.pronunciation_map = cleaned
     return ns
 
 

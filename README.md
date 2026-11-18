@@ -16,7 +16,7 @@ This README explains how to **install and configure BookCoder on Debian**.
 - **Narration engines:**
   - **Edge Neural TTS (online):** natural neural voices, no API key required (internet needed for synthesis/voice listing)
   - **Piper (offline):** local neural TTS; works offline after voice models are downloaded
-- **Voices:** English and Hungarian, male/female options (engine-dependent), voice previews, speed/pitch/style controls, dynamic tone profiles, and optional dialogue voice-casting hook
+- **Voices:** English and Hungarian, male/female options (engine-dependent), voice previews, speed/pitch/style controls, dynamic tone profiles, dialogue/alternate-voice casting hooks, and pronunciation dictionary overrides/presets/import-export
 - **Offline model management (Piper):** in-app download, progress, delete, and “use voice” for recommended models
 - **Chapters:** automatic extraction/section detection, include/exclude, reorder, per-chapter audio output
 - **Output formats:** **MP3 (.mp3)** and **AAC (.m4a, iPhone-compatible)**
@@ -204,7 +204,8 @@ Stored settings include (per language where applicable):
 - selected narration engine/provider
 - selected voice
 - speed/pitch/style preferences
-- dynamic tone profile and optional dialogue voice preference (per language where applicable)
+- dynamic tone profile, paragraph/sentence pause controls, and dialogue voice-casting preferences/hooks (including alternate dialogue voice; per language where applicable)
+- pronunciation dictionary/map (synthesis-time overrides, with UI import/export and presets)
 - output format (MP3 or AAC/M4A)
 - output quality/options (e.g. bitrate/combine/pause)
 - last output directory
@@ -305,7 +306,7 @@ python -m bookcoder --host 0.0.0.0 --port 8765 --no-browser
 6. **Choose narration engine and voice**
    - For **Piper (Offline)**, download a recommended voice in **“Offline Voice Models (Piper)”** first
    - Preview voice and adjust speed/pitch/style
-   - Optionally choose a dynamic tone profile and/or a dialogue voice (casting hook) for more expressive narration
+   - Optionally choose a dynamic tone profile, paragraph/sentence pause controls, dialogue/alternate dialogue voices (smart quote-span casting hooks), and pronunciation dictionary entries (with presets/import/export) for more expressive/accurate narration
 7. **Configure output**
    - Output folder
    - Output format: **MP3** or **AAC (.m4a)** (choose AAC/M4A for direct copy to iPhone)
@@ -468,6 +469,15 @@ systemctl --user disable --now bookcoder.service
   python -m bookcoder --no-browser
   # then visit http://127.0.0.1:8765
   ```
+
+---
+
+### Narration quality and casting notes
+
+- **Text normalization/pronunciation:** synthesis-time normalization can apply abbreviation/symbol/date-time cleanup and user-defined pronunciation overrides (dictionary/presets/import-export).
+- **Structure-aware segmentation:** narration is planned with paragraph/scene/title-aware pauses and subtle prosody hints (provider-safe).
+- **Dialogue casting heuristics:** BookCoder can detect dialogue blocks and quoted spans (intra-paragraph heuristics) and apply dialogue voice-casting hooks. An optional alternate dialogue voice can be used for alternating quoted speakers (heuristic, not speaker attribution).
+- **Fallbacks:** advanced tone/casting features degrade safely per engine/provider capability (e.g. pitch hints only where supported).
 
 ---
 
