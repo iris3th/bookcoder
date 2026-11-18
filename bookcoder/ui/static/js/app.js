@@ -17,6 +17,7 @@
     chaptersExpanded: false,
     offlineModelsExpanded: false,
     hardware: null,
+    cancelling: false,
   };
 
   // Elements
@@ -687,22 +688,28 @@
   function updateOfflineModelsSummary() {
     if (!offlineModelsSummary) return;
     const models = state.offlineModels || [];
-    if (!models.length) {
-      offlineModelsSummary.textContent = 'Download and manage offline voice models for Piper, Coqui XTTS, and MMS-TTS. Expand to view available models.';
+    const pid = state.selectedProviderId || '';
+    const pname = pid ? providerLabel(pid) : 'offline engines';
+
+    if (pid === 'edge-tts') {
+      offlineModelsSummary.textContent = 'Edge TTS is online-only and does not use offline model downloads.';
       return;
     }
+
+    if (!models.length) {
+      if (['piper', 'coqui-xtts', 'mms-tts'].includes(pid)) {
+        offlineModelsSummary.textContent = `No offline models listed for ${pname}. Expand to check language filters or refresh.`;
+      } else {
+        offlineModelsSummary.textContent = 'Download and manage offline voice models for Piper, Coqui XTTS, and MMS-TTS. Select an offline narration engine to view its models.';
+      }
+      return;
+    }
+
     const total = models.length;
     const downloaded = models.filter(m => m && m.downloaded).length;
     const downloading = models.filter(m => m && (m.downloading || m.status === 'downloading')).length;
-    const byProvider = models.reduce((acc, m) => {
-      const pid = (m && m.provider_id) || 'piper';
-      acc[pid] = (acc[pid] || 0) + 1;
-      return acc;
-    }, {});
-    const providerParts = Object.entries(byProvider).map(([pid, n]) => `${providerLabel(pid)} ${n}`).join(', ');
-    let text = `${total} model${total === 1 ? '' : 's'} available • ${downloaded} downloaded`;
+    let text = `${total} ${pname} model${total === 1 ? '' : 's'} listed • ${downloaded} downloaded`;
     if (downloading) text += ` • ${downloading} downloading`;
-    if (providerParts) text += ` (${providerParts})`;
     text += '. Expand to download, remove, or use models.';
     offlineModelsSummary.textContent = text;
   }
@@ -761,6 +768,7 @@
     state.selectedProviderId = providerSelect.value || '';
     updateProviderMeta();
     await loadVoices(getEffectiveLanguage());
+    await loadOfflineModels();
     await refreshProviders(); // update counts/labels
     providerSelect.value = state.selectedProviderId;
     updateProviderMeta();
@@ -954,10 +962,27 @@
   async function loadOfflineModels() {
     try {
       const filter = modelLanguageFilter.value;
-      let langParam = '';
-      if (filter === 'current') langParam = getEffectiveLanguage();
-      else if (filter === 'en' || filter === 'hu') langParam = filter;
-      const url = langParam ? `/api/offline-models?language=${encodeURIComponent(langParam)}` : '/api/offline-models';
+      const params = new URLSearchParams();
+      if (filter === 'current') {
+        const lang = getEffectiveLanguage();
+        if (lang) params.set('language', lang);
+      } else if (filter === 'en' || filter === 'hu') {
+        params.set('language', filter);
+      }
+      if (state.selectedProviderId && ['piper', 'coqui-xtts', 'mms-tts'].includes(state.selectedProviderId)) {
+        params.set('provider', state.selectedProviderId);
+      } else if (state.selectedProviderId === 'edge-tts') {
+        // No offline models for Edge
+        state.offlineModels = [];
+        modelsDirInfo.textContent = 'Edge TTS is online-only and does not use offline model downloads.';
+        renderOfflineModels();
+        ensureDownloadPolling();
+        return;
+      } else if (state.selectedProviderId) {
+        params.set('provider', state.selectedProviderId);
+      }
+      const qs = params.toString();
+      const url = qs ? `/api/offline-models?${qs}` : '/api/offline-models';
       const res = await fetchJSON(url);
       if (res.ok) {
         state.offlineModels = res.models || [];
@@ -996,7 +1021,13 @@
     updateOfflineRuntimeNotice((state.providers || []).find(p => p.id === state.selectedProviderId));
 
     if (!models.length) {
-      offlineModelsList.innerHTML = `<div class="empty-state">No offline models match the selected filters.</div>`;
+      let msg = 'No offline models match the selected filters.';
+      if (state.selectedProviderId === 'edge-tts') {
+        msg = 'Edge TTS uses online voices and does not require offline model downloads.';
+      } else if (['piper', 'coqui-xtts', 'mms-tts'].includes(state.selectedProviderId)) {
+        msg = `No ${providerLabel(state.selectedProviderId)} models match the selected filters. Try changing the language/gender filter or click Refresh.`;
+      }
+      offlineModelsList.innerHTML = `<div class="empty-state">${msg}</div>`;
       return;
     }
     offlineModelsList.innerHTML = '';
@@ -1174,10 +1205,25 @@
     // Reload model statuses; server merges progress
     try {
       const filter = modelLanguageFilter.value;
-      let langParam = '';
-      if (filter === 'current') langParam = getEffectiveLanguage();
-      else if (filter === 'en' || filter === 'hu') langParam = filter;
-      const url = langParam ? `/api/offline-models?language=${encodeURIComponent(langParam)}` : '/api/offline-models';
+      const params = new URLSearchParams();
+      if (filter === 'current') {
+        const lang = getEffectiveLanguage();
+        if (lang) params.set('language', lang);
+      } else if (filter === 'en' || filter === 'hu') {
+        params.set('language', filter);
+      }
+      if (state.selectedProviderId && ['piper', 'coqui-xtts', 'mms-tts'].includes(state.selectedProviderId)) {
+        params.set('provider', state.selectedProviderId);
+      } else if (state.selectedProviderId === 'edge-tts') {
+        state.offlineModels = [];
+        renderOfflineModels();
+        ensureDownloadPolling();
+        return;
+      } else if (state.selectedProviderId) {
+        params.set('provider', state.selectedProviderId);
+      }
+      const qs = params.toString();
+      const url = qs ? `/api/offline-models?${qs}` : '/api/offline-models';
       const res = await fetchJSON(url);
       if (res.ok) {
         const prevDownloading = (state.offlineModels || []).some(m => m.downloading || m.status === 'downloading');
@@ -1213,9 +1259,12 @@
 
     hideGenError();
     resultBox.classList.add('hidden');
+    state.cancelling = false;
     progressWrap.classList.remove('hidden');
     setProgress(0, 'Starting', 'Preparing audiobook generation…');
     generateBtn.disabled = true;
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Cancel';
     cancelBtn.classList.remove('hidden');
 
     await saveSettings();
@@ -1270,7 +1319,10 @@
   function handleJobEvent(data) {
     if (!data) return;
     if (data.type === 'snapshot') {
-      if (data.status && data.status !== 'running') {
+      if (data.status === 'cancelling') {
+        state.cancelling = true;
+        setProgress(null, 'Cancelling', 'Cancelling… waiting for the current step to finish.');
+      } else if (data.status && data.status !== 'running') {
         if (data.status === 'done') handleJobEvent({ type: 'done', result: data.result });
         else if (data.status === 'error') handleJobEvent({ type: 'error', message: data.error || 'Error' });
         else if (data.status === 'cancelled') handleJobEvent({ type: 'cancelled' });
@@ -1279,11 +1331,17 @@
     }
     if (data.type === 'progress') {
       const pct = Math.max(0, Math.min(100, Math.round((data.fraction || 0) * 100)));
-      const stageLabel = stageName(data.stage);
-      setProgress(pct, stageLabel, data.message || '');
+      if (state.cancelling) {
+        const msg = data.message ? `Cancelling… ${data.message}` : 'Cancelling… waiting for the current step to finish.';
+        setProgress(pct, 'Cancelling', msg);
+      } else {
+        const stageLabel = stageName(data.stage);
+        setProgress(pct, stageLabel, data.message || '');
+      }
       return;
     }
     if (data.type === 'done') {
+      state.cancelling = false;
       setProgress(100, 'Complete', data.message || 'Audiobook generation complete.');
       showResult(data.result);
       closeProgressStream();
@@ -1291,12 +1349,14 @@
       return;
     }
     if (data.type === 'error') {
+      state.cancelling = false;
       showGenError(data.message || 'An error occurred during generation.');
       closeProgressStream();
       resetGenerationUI();
       return;
     }
     if (data.type === 'cancelled') {
+      state.cancelling = false;
       setProgress(null, 'Cancelled', 'Generation cancelled.');
       closeProgressStream();
       resetGenerationUI();
@@ -1354,7 +1414,10 @@
 
   function resetGenerationUI() {
     generateBtn.disabled = false;
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Cancel';
     cancelBtn.classList.add('hidden');
+    state.cancelling = false;
     state.jobId = null;
   }
 
@@ -1364,12 +1427,18 @@
 
   async function cancelGeneration() {
     if (!state.jobId) return;
+    state.cancelling = true;
     cancelBtn.disabled = true;
+    setProgress(null, 'Cancelling', 'Cancelling… waiting for the current step to finish.');
     try {
       await fetchJSON(`/api/jobs/${encodeURIComponent(state.jobId)}/cancel`, { method: 'POST' });
-      progressMessage.textContent = 'Cancelling…';
-    } catch (e) { /* ignore */ }
-    finally { cancelBtn.disabled = false; }
+    } catch (e) {
+      // keep UI in cancelling state; job may still stop if signal was received earlier
+      setProgress(null, 'Cancelling', 'Cancel requested. Waiting for the current step to finish…');
+    } finally {
+      // keep button disabled while cancelling to avoid repeated requests
+      cancelBtn.disabled = true;
+    }
   }
 
   async function removeCurrentBook() {

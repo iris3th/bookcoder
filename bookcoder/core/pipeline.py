@@ -24,7 +24,8 @@ from .text_normalization import normalize_for_tts
 from .tts.base import SynthesisRequest, TTSProvider, TTSProviderError
 
 
-class CancelledError(Exception):
+class CancelledError(BaseException):
+    """Raised when generation is cancelled by the user.""" 
     pass
 
 
@@ -290,6 +291,7 @@ class AudiobookPipeline:
             combined_path = out_dir / combined_name
 
             def combine_progress(cur: int, tot: int):
+                self._check_cancel()
                 if progress:
                     progress(
                         ProgressUpdate(
@@ -472,6 +474,7 @@ class AudiobookPipeline:
 
                 # Provider-internal chunk progress mapped into this segment's slice
                 def _seg_progress(cur: int, tot: int, msg: str):
+                    self._check_cancel()
                     if not progress:
                         return
                     base = (chapter_index - 1) / max(chapter_total, 1)

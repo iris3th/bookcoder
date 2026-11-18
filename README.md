@@ -116,7 +116,36 @@ cd bookcoder
 
 ---
 
-## 4) Create a Python virtual environment and install dependencies
+## 4) Install BookCoder and Python dependencies
+
+### Quick install with `install.sh` (recommended for Debian/Linux)
+
+BookCoder includes an interactive installer script that can set up a virtual environment, detect/select NVIDIA/AMD/CPU targets, install base dependencies, install PyTorch for the selected target (with CPU fallback if a GPU wheel/tag is unavailable for your Python/platform), and install heavy-engine dependencies.
+
+```bash
+cd /path/to/bookcoder
+./install.sh
+```
+
+The installer will:
+- ask for an install location (default: `~/bookcoder`) and copy project files there
+- detect NVIDIA/AMD GPUs (or let you choose NVIDIA/AMD/CPU if detection is unclear)
+- let you choose a Python interpreter for the virtual environment (useful when multiple Python versions are installed)
+- create/reuse `<install_location>/.venv`
+- install base requirements and BookCoder
+- install PyTorch (`torch`, `torchaudio`) for the selected target; if a selected CUDA/ROCm wheel tag cannot be installed for your Python version/platform, it can retry another tag or fall back to CPU PyTorch
+- install MMS-TTS dependencies (`transformers>=4.41`, `numpy`, `scipy`) and attempt to install Coqui TTS (`TTS>=0.22.0`, optional)
+  - if Coqui TTS is unavailable (common on newer Python versions such as 3.13), the installer warns and continues so Edge/Piper/MMS-TTS can still be used
+
+You can also override the Python interpreter directly:
+
+```bash
+PYTHON_BIN=python3.12 ./install.sh
+```
+
+> The installer installs Python packages/PyTorch wheels only. It does **not** install system GPU drivers, CUDA, or ROCm.
+
+### Manual install (virtual environment)
 
 Create and activate a virtual environment:
 
@@ -152,9 +181,11 @@ The app uses (among others):
 
 Additional engines are supported when their dependencies are installed (they will appear as unavailable with install hints until then):
 
-- **Coqui XTTS v2**: `pip install -e ".[coqui]"` (or install `TTS` + `torch`)
-- **Meta MMS-TTS**: `pip install -e ".[mms]"` (or install `transformers` + `torch` + `numpy` + `scipy`)
+- **Coqui XTTS v2**: `pip install -e ".[coqui]"` (or install `torch`, `torchaudio`, and `TTS>=0.22.0`)
+- **Meta MMS-TTS**: `pip install -e ".[mms]"` (or install `torch`, `torchaudio`, `transformers>=4.41`, `numpy`, and `scipy`)
 - **Both**: `pip install -e ".[heavy-tts]"`
+
+`install.sh` installs these heavy-engine Python dependencies as part of its setup flow (with PyTorch target selection/CPU fallback and optional/non-fatal handling if Coqui `TTS` is unavailable for the current Python/platform). The Dockerfile, when `BOOKCODER_EXTRAS` is set, explicitly installs `torch`/`torchaudio` and ensures `transformers`, `numpy`, and `scipy` are present (with CPU fallback if a GPU-targeted PyTorch install via `PIP_EXTRA_ARGS` fails).
 
 Notes:
 - These engines are **heavy** (PyTorch-based), may download large model files on first use, and can be much slower on CPU.
@@ -334,6 +365,8 @@ The `Dockerfile` supports build args for optional extras and custom pip install 
 
 - `BOOKCODER_EXTRAS` — optional extras from `pyproject.toml` (e.g. `coqui`, `mms`, `heavy-tts`)
 - `PIP_EXTRA_ARGS` — extra `pip` args (useful for GPU-enabled PyTorch wheels/index URLs)
+
+When `BOOKCODER_EXTRAS` is set, the image build explicitly installs `torch`/`torchaudio` and ensures `transformers`, `numpy`, and `scipy` are present for heavy engines. If a GPU-targeted PyTorch install using `PIP_EXTRA_ARGS` fails (for example, an incompatible Python/wheel tag), the build falls back to default CPU PyTorch wheels so the image can still run heavy engines on CPU when possible.
 
 Examples:
 

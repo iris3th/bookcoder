@@ -48,9 +48,11 @@ A major milestone release expanding BookCoder from a core local audiobook genera
   - MMS synthesis path updated to use GPU device placement when available
 - **Packaging, deployment, and documentation**
   - Project packaging/configuration (`pyproject.toml`, module entrypoint, local settings/model/data paths)
+  - Interactive `install.sh` for Debian/Linux: install location selection, NVIDIA/AMD GPU detection or manual target selection, Python interpreter selection, virtual environment setup, base/heavy dependency installation, and PyTorch target selection
+  - Installer resilience for heavy engines: CPU fallback when a selected CUDA/ROCm PyTorch wheel/tag is unavailable for the current Python/platform, separate/verified installation of MMS-TTS dependencies (`transformers`, `numpy`, `scipy`), and non-fatal handling when optional Coqui TTS (`TTS>=0.22.0`) cannot be installed (e.g. newer Python versions)
   - Dockerfile and Podman Compose configuration for local containerized usage
-  - Docker build customization for optional heavy-engine extras and pip install args (`BOOKCODER_EXTRAS`, `PIP_EXTRA_ARGS`) with NVIDIA/AMD container runtime guidance
-  - Expanded README covering installation, engine/model setup, offline model management, GPU acceleration (NVIDIA/AMD), and container usage
+  - Docker build customization for optional heavy-engine extras and pip install args (`BOOKCODER_EXTRAS`, `PIP_EXTRA_ARGS`) with NVIDIA/AMD container runtime guidance, explicit heavy-dependency installation, and CPU PyTorch fallback when GPU-targeted wheel installs fail
+  - Expanded README covering installation (`install.sh` and manual setup), engine/model setup, offline model management, GPU acceleration (NVIDIA/AMD), and container usage
   - Source distribution/tarball packaging workflow for upload-ready builds
 
 ### Changed
@@ -61,4 +63,6 @@ A major milestone release expanding BookCoder from a core local audiobook genera
 ### Notes
 - Coqui XTTS v2 and MMS-TTS are optional and may require large dependency/model downloads; performance varies by CPU/GPU and installed runtime.
 - GPU acceleration depends on host drivers and a compatible CUDA/ROCm-enabled PyTorch installation. BookCoder detects and uses available acceleration but does not install system GPU drivers/toolkits automatically.
+- PyTorch wheel availability varies by Python version, platform, and CUDA/ROCm tag. `install.sh` and the Dockerfile include CPU fallback behavior when a selected GPU wheel install is unavailable/incompatible, but GPU acceleration requires a compatible installed runtime.
+- Coqui TTS package support may lag newer Python releases (e.g. Python 3.13); when `TTS>=0.22.0` cannot be installed, Coqui XTTS v2 may remain unavailable while other engines (Edge, Piper, MMS-TTS) can still work.
 - Some Coqui model cache deletion behavior is runtime/cache-layout dependent and may be best-effort in-app.
