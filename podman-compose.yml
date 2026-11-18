@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  bookcoder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bookcoder:local
+    container_name: bookcoder
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      BOOKCODER_HOST: "0.0.0.0"
+      BOOKCODER_PORT: "8765"
+      XDG_CONFIG_HOME: /data/config
+      XDG_DATA_HOME: /data/share
+      HOME: /data/home
+    volumes:
+      - bookcoder_config:/data/config
+      - bookcoder_share:/data/share
+      - ./audiobooks:/audiobooks
+    restart: unless-stopped
+
+volumes:
+  bookcoder_config:
+  bookcoder_share:

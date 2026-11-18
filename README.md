@@ -242,6 +242,51 @@ By default BookCoder binds to `127.0.0.1`, which is recommended for single-user 
 
 If you bind to another interface (for example `0.0.0.0`) to access it from another device on your network, be aware that BookCoder is designed as a local app and does not include authentication. Use firewall rules and trusted networks only.
 
+---
+
+## Container usage (Dockerfile / Podman Compose)
+
+This project includes a `Dockerfile` and a `podman-compose.yml` for local containerized usage. The container binds the app internally to `0.0.0.0:8765` and the compose file publishes it to **localhost only** (`127.0.0.1:8765`).
+
+### Build and run with Podman Compose
+
+From the project root (`bookcoder/`, where `Dockerfile` and `podman-compose.yml` are located):
+
+```bash
+mkdir -p audiobooks
+podman-compose up --build
+```
+
+Then open: `http://127.0.0.1:8765`
+
+To run in the background:
+
+```bash
+podman-compose up --build -d
+podman-compose logs -f
+```
+
+Stop:
+
+```bash
+podman-compose down
+```
+
+### Build and run with Docker / Docker Compose
+
+```bash
+mkdir -p audiobooks
+docker compose -f podman-compose.yml up --build
+# or: docker-compose -f podman-compose.yml up --build
+```
+
+### Notes
+
+- **Persistence:** named volumes store BookCoder settings and downloaded Piper voice models (`/data/config`, `/data/share`).
+- **Audiobook output:** `./audiobooks` on the host is mounted to `/audiobooks` in the container. In the BookCoder UI, set the output folder to a path under `/audiobooks` (e.g. `/audiobooks/MyBook`) to access generated files on the host.
+- **Network exposure:** the compose file publishes only to `127.0.0.1` by default. Do not expose it publicly without additional protections.
+- **Offline models / online TTS:** container needs internet access for Edge TTS synthesis and for downloading Piper voice models (models persist in the volume after download).
+
 Example (local network use, at your own risk):
 
 ```bash
