@@ -4,6 +4,7 @@ import html
 import os
 import re
 import tempfile
+import unicodedata
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -529,18 +530,135 @@ def _split_by_size(text: str, target_chars: int = 12000) -> list[Chapter]:
 
 # ----------------------- HTML/Text utilities -------------------------
 
-def _html_to_text_and_heading(content: bytes | str) -> tuple[str, str]:
-    if isinstance(content, bytes):
-        for enc in ("utf-8", "utf-8-sig", "cp1250", "latin-1"):
+def _decode_book_bytes(content: bytes) -> str:
+    if not content:
+        return ""
+
+    # Try to detect declared encoding from HTML/XML meta tags in a prefix.
+    head = content[:4096]
+    declared = []
+    try:
+        head_ascii = head.decode("ascii", errors="ignore")
+        m = re.search(r"charset\s*=\s*['\"]?\s*([A-Za-z0-9._-]+)", head_ascii, re.IGNORECASE)
+        if m:
+            declared.append(m.group(1).strip())
+        m2 = re.search(r"encoding\s*=\s*['\"]\s*([A-Za-z0-9._-]+)\s*['\"]", head_ascii, re.IGNORECASE)
+        if m2:
+            declared.append(m2.group(1).strip())
+    except Exception:
+        pass
+
+    def _norm_enc(name: str) -> str:
+        n = (name or "").strip().lower().replace("_", "-")
+        aliases = {
+            "utf8": "utf-8",
+            "utf-8-sig": "utf-8-sig",
+            "iso8859-2": "iso-8859-2",
+            "iso-8859-2": "iso-8859-2",
+            "latin2": "iso-8859-2",
+            "latin-2": "iso-8859-2",
+            "iso8859-1": "latin-1",
+            "iso-8859-1": "latin-1",
+            "latin1": "latin-1",
+            "latin-1": "latin-1",
+            "windows-1250": "cp1250",
+            "win-1250": "cp1250",
+            "cp1250": "cp1250",
+            "windows-1252": "cp1252",
+            "cp1252": "cp1252",
+        }
+        return aliases.get(n, n or "utf-8")
+
+    candidates = []
+    for enc in declared + ["utf-8-sig", "utf-8", "cp1250", "iso-8859-2", "cp1252", "latin-1"]:
+        encn = _norm_enc(enc)
+        if encn and encn not in candidates:
+            candidates.append(encn)
+
+    decoded: list[tuple[str, str]] = []
+    for enc in candidates:
+        try:
+            s = content.decode(enc)
+            decoded.append((enc, s))
+        except Exception:
+            continue
+    if not decoded:
+        try:
+            return content.decode("utf-8", errors="replace")
+        except Exception:
+            return content.decode("latin-1", errors="replace")
+
+    def score(enc: str, s: str) -> int:
+        sc = 0
+        sample = s[:20000]
+        # Prefer declared/utf-8 when valid
+        if enc in ("utf-8", "utf-8-sig"):
+            sc += 20
+        # Penalize common mojibake markers (UTF-8 mis-decoded as single-byte encodings)
+        for marker in ("Ã©", "Ã¡", "Ã­", "Ã³", "Ãº", "Ã¶", "Ã¼", "Ãµ", "Ã»", "Å‘", "Å±", "Åž", "Ä‘", "Ä", "Ă©", "Ăˇ", "Ăł", "Ăş", "Ă¶", "Ă¼", "Ăµ", "Ă»", "Ĺ‘", "Ĺ±"):
+            sc -= sample.count(marker) * 3
+        # Penalize likely Central European -> Western mis-decoding confusables for Hungarian text
+        sc -= (sample.count("õ") + sample.count("û") + sample.count("Õ") + sample.count("Û")) * 2
+        # Penalize replacement/control chars
+        sc -= sample.count("\ufffd") * 10
+        sc -= sum(1 for ch in sample if ord(ch) < 32 and ch not in "\n\r\t")
+        # Reward Hungarian letters and common text chars
+        sc += sum(sample.count(ch) for ch in "áéíóöőúüűÁÉÍÓÖŐÚÜŰ") // 2
+        sc += sample.count("ő") + sample.count("ű") + sample.count("Ő") + sample.count("Ű")
+        # Reward common punctuation/letters presence
+        sc += min(len(re.findall(r"[A-Za-z]", sample)) // 50, 20)
+        return sc
+
+    enc, best = max(decoded, key=lambda item: score(item[0], item[1]))
+    # If best still looks like UTF-8 mojibake, try repairing
+    best = _repair_mojibake_text(best)
+    return best
+
+
+def _repair_mojibake_text(text: str) -> str:
+    if not text:
+        return text
+    markers = ("Ã", "Ä", "Å", "Æ", "Â", "Ă", "Ĺ", "Ľ", "Ň")
+    if not any(m in text for m in markers):
+        return text
+
+    def score(s: str) -> int:
+        sample = s[:20000]
+        sc = 0
+        sc += sum(sample.count(ch) for ch in "áéíóöőúüűÁÉÍÓÖŐÚÜŰ") * 4
+        for marker in ("Ã©", "Ã¡", "Ã­", "Ã³", "Ãº", "Ã¶", "Ã¼", "Ãµ", "Ã»", "Å‘", "Å±", "Ä‘", "Ä", "Ă©", "Ăˇ", "Ăł", "Ăş", "Ă¶", "Ă¼", "Ăµ", "Ă»", "Ĺ‘", "Ĺ±", "Â"):
+            sc -= sample.count(marker) * 3
+        sc -= sample.count("\ufffd") * 10
+        return sc
+
+    candidates = [text]
+    for enc in ("latin-1", "cp1252", "cp1250", "iso-8859-2"):
+        try:
+            candidates.append(text.encode(enc, errors="strict").decode("utf-8", errors="strict"))
+        except Exception:
             try:
-                s = content.decode(enc)
-                break
+                candidates.append(text.encode(enc, errors="ignore").decode("utf-8", errors="ignore"))
             except Exception:
                 continue
-        else:
-            s = content.decode("utf-8", errors="replace")
+    # pick best scoring candidate
+    try:
+        best = max(candidates, key=score)
+        if score(best) > score(text):
+            return best
+    except Exception:
+        pass
+    return text
+
+
+def _html_to_text_and_heading(content: bytes | str) -> tuple[str, str]:
+    if isinstance(content, bytes):
+        s = _decode_book_bytes(content)
     else:
         s = content
+        try:
+            s = _repair_mojibake_text(s)
+        except Exception:
+            pass
 
     # Try BeautifulSoup for robust parsing
     try:
@@ -584,12 +702,31 @@ def _html_to_text_and_heading(content: bytes | str) -> tuple[str, str]:
 
     text = _clean_extracted_text(text)
     heading = re.sub(r"\s+", " ", html.unescape(heading)).strip()
+    try:
+        heading = normalize_hungarian_text_marks(_repair_mojibake_text(heading), None)
+    except Exception:
+        pass
     return text, heading
 
 
 def _clean_extracted_text(text: str) -> str:
     # Unescape entities and normalize whitespace while preserving paragraph breaks
+    if not text:
+        return ""
     text = text.replace("\xa0", " ")
+    try:
+        text = _repair_mojibake_text(text)
+    except Exception:
+        pass
+    try:
+        text = unicodedata.normalize("NFC", text)
+    except Exception:
+        pass
+    try:
+        from .text_normalization import normalize_hungarian_text_marks
+        text = normalize_hungarian_text_marks(text, None)
+    except Exception:
+        pass
     # collapse spaces/tabs
     text = re.sub(r"[ \t\f\v]+", " ", text)
     # normalize newlines
@@ -614,7 +751,7 @@ def _clean_extracted_text(text: str) -> str:
 
 
 def normalize_narration_text(text: str) -> str:
-    """Clean text for TTS: remove artifacts that shouldn't be read aloud."""
+    """Clean text for TTS/display: remove artifacts and normalize Hungarian diacritics."""
     if not text:
         return ""
     t = text
@@ -624,6 +761,17 @@ def normalize_narration_text(text: str) -> str:
     t = html.unescape(t)
     # Remove stray markup-like tokens
     t = re.sub(r"<[^>]+>", " ", t)
+    # Normalize Unicode and fix common malformed Hungarian accent marks
+    # (e.g. decomposed accents or base letters followed by hyphen/accent-like marks)
+    try:
+        t = unicodedata.normalize("NFC", t)
+    except Exception:
+        pass
+    try:
+        from .text_normalization import normalize_hungarian_text_marks
+        t = normalize_hungarian_text_marks(t, None)
+    except Exception:
+        pass
     # Remove bracketed numeric refs like [1], (12) when isolated footnote markers (conservative)
     t = re.sub(r"\[\d+\]", " ", t)
     # Replace fancy quotes/dashes with simpler forms for more consistent TTS handling

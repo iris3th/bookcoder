@@ -2,6 +2,20 @@
 
 All notable changes to BookCoder are documented in this file.
 
+## [2.1.0] - 2026-11-19
+
+### Fixed
+- **Hungarian long-character normalization for ebook text (MOBI/EPUB/HTML parsing)**
+  - Improved understanding and restoration of Hungarian accented characters (`á`, `é`, `í`, `ó`, `ö`, `ő`, `ú`, `ü`, `ű`) in extracted/narration text.
+  - Added mojibake repair and NFC/NFKC-aware normalization, including handling for spaced/combining/hyphen/dash accent-mark forms.
+  - Added broad, codepage-aware confusable mapping to recover common mis-decoded forms in uploaded ebooks (notably CP1250/ISO-8859-2 vs CP1252/ISO-8859-1 cases such as `õ/Õ/û/Û -> ő/Ő/ű/Ű`, and Hungarian-context `ò/Ò -> ó/Ó`), with multi-encoding round-trip candidates and safe scoring in parsing/decoding.
+
+### Changed
+- **Licensing (AGPL-3.0-or-later)**
+  - Added `LICENSE` with the full GNU Affero General Public License v3 text and adopted **AGPL-3.0-or-later** for BookCoder distribution/use/modification.
+  - Updated project metadata (`pyproject.toml`) with AGPL license information/classifiers.
+  - Added a GitHub-visible License section to `README.md` documenting AGPL-3.0-or-later terms, network-use/source-availability (AGPLv3 §13), no-warranty notice, and third-party dependency/model license considerations.
+
 ## [2.0.0] - 2026-11-18
 
 A major milestone release expanding BookCoder from a core local audiobook generator into a multi-engine, multi-format narration studio with offline model management, improved narration controls, and hardware acceleration support.

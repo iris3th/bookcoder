@@ -603,3 +603,17 @@ systemctl --user disable --now bookcoder.service
 - Online narration (Edge) sends synthesis requests to Microsoft’s Edge TTS service.
 - Offline narration (Piper) runs locally after models are downloaded.
 - For best results (especially with long books), keep FFmpeg installed and ensure sufficient disk space in your output and model directories.
+
+---
+
+## License
+
+BookCoder is licensed under the **GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later)**.
+
+- You are free to use, study, modify, and redistribute this software.
+- If you modify BookCoder and distribute it, or run a modified version as a network-accessible service, you must make the corresponding source code available under the same license (see AGPLv3 Section 13 for network interaction requirements).
+- This program is distributed in the hope that it will be useful, but **WITHOUT ANY WARRANTY**; without even the implied warranty of **MERCHANTABILITY** or **FITNESS FOR A PARTICULAR PURPOSE**.
+
+See the full license text in [`LICENSE`](LICENSE).
+
+> **Note:** BookCoder depends on third-party libraries, runtimes, and tools (e.g. Python packages, FFmpeg/Calibre, and downloaded TTS/voice models) that are distributed under their own licenses/terms. Ensure you comply with those licenses when using or redistributing BookCoder and its dependencies/models.

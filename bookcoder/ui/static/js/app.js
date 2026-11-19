@@ -18,6 +18,7 @@
     offlineModelsExpanded: false,
     hardware: null,
     cancelling: false,
+    generating: false,
   };
 
   // Elements
@@ -1244,6 +1245,39 @@
   }
 
   // ---- Generation ----
+  function setGeneratingState(isGenerating) {
+    const on = !!isGenerating;
+    state.generating = on;
+    document.body.classList.toggle('is-generating', on);
+
+    const controls = document.querySelectorAll('button, input, select, textarea');
+    controls.forEach(el => {
+      if (!el) return;
+      if (el.id === 'cancelBtn') return;
+      if (on) {
+        if (el.dataset.prevDisabled === undefined) {
+          el.dataset.prevDisabled = el.disabled ? '1' : '0';
+        }
+        el.disabled = true;
+      } else {
+        if (el.dataset.prevDisabled !== undefined) {
+          el.disabled = el.dataset.prevDisabled === '1';
+          delete el.dataset.prevDisabled;
+        } else {
+          // fallback: leave as-is if unknown
+        }
+      }
+    });
+
+    if (!on) {
+      // Restore dynamic/conditional control states
+      updateProviderMeta();
+      if (state.book) renderChapters();
+      renderOfflineModels();
+      refreshProviderStatus();
+    }
+  }
+
   async function startGeneration() {
     if (!state.book) { showGenError('Please upload a book first.'); return; }
     const included = state.book.chapters.filter(c => c.included);
@@ -1260,6 +1294,7 @@
     hideGenError();
     resultBox.classList.add('hidden');
     state.cancelling = false;
+    setGeneratingState(true);
     progressWrap.classList.remove('hidden');
     setProgress(0, 'Starting', 'Preparing audiobook generation…');
     generateBtn.disabled = true;
@@ -1413,6 +1448,7 @@
   }
 
   function resetGenerationUI() {
+    setGeneratingState(false);
     generateBtn.disabled = false;
     cancelBtn.disabled = false;
     cancelBtn.textContent = 'Cancel';

@@ -267,6 +267,27 @@ input[type="range"] { width: 100%; accent-color: var(--primary); }
 }
 .btn-success:hover { background: rgba(57,217,138,0.2); }
 
+/* During audiobook generation, lock UI controls except Stop/Cancel */
+body.is-generating .layout input:not(#cancelBtn),
+body.is-generating .layout select,
+body.is-generating .layout textarea,
+body.is-generating .layout button:not(#cancelBtn),
+body.is-generating .layout .drop-zone {
+  pointer-events: none;
+}
+body.is-generating .layout select,
+body.is-generating .layout input:not([type="hidden"]),
+body.is-generating .layout textarea,
+body.is-generating .layout .drop-zone,
+body.is-generating .layout .chapter-item,
+body.is-generating .layout .model-card {
+  opacity: 0.65;
+}
+body.is-generating #cancelBtn {
+  pointer-events: auto;
+  opacity: 1;
+}
+
 @media (max-width: 900px) {
   .model-filters { grid-template-columns: 1fr; }
   .model-card { grid-template-columns: 1fr; }
