@@ -142,8 +142,13 @@ class SettingsStore:
                 pass
         if "output_format" in d and isinstance(d["output_format"], str):
             fmt = d["output_format"].strip().lower()
-            if fmt in ("mp3", "m4a", "aac", "mp4"):
-                ns.output_format = "m4a" if fmt in ("m4a", "aac", "mp4") else "mp3"
+            if fmt in ("mp3", "m4a", "aac", "mp4", "m4b", "audiobook"):
+                if fmt in ("m4b", "audiobook"):
+                    ns.output_format = "m4b"
+                elif fmt in ("m4a", "aac", "mp4"):
+                    ns.output_format = "m4a"
+                else:
+                    ns.output_format = "mp3"
         if "output_bitrate_kbps" in d:
             try:
                 ns.output_bitrate_kbps = int(d["output_bitrate_kbps"])

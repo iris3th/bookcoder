@@ -2,7 +2,7 @@
 
 BookCoder is a local desktop-style web application for converting ebooks and text documents into high-quality audiobooks with natural-sounding AI narration.
 
-It supports **EPUB**, **MOBI**, **AZW3**, and **TXT** input, automatic **English/Hungarian** language detection, chapter extraction, and audiobook generation with both **online** (Microsoft Edge Neural TTS) and **offline** (Piper) voice engines. Output can be generated as **MP3** or **AAC in M4A** (recommended for direct copy to iPhone).
+It supports **EPUB**, **MOBI**, **AZW3**, and **TXT** input, automatic **English/Hungarian** language detection, chapter extraction, and audiobook generation with both **online** (Microsoft Edge Neural TTS) and **offline** (Piper) voice engines. Output can be generated as **MP3**, **AAC in M4A**, or **M4B audiobook** (single combined file with embedded chapter markers/metadata, recommended for Apple Books).
 
 This README explains how to **install and configure BookCoder on Debian**.
 
@@ -22,10 +22,15 @@ This README explains how to **install and configure BookCoder on Debian**.
 - **Offline model management:** in-app download, progress, delete/remove, and “use” for Piper voices and heavy-engine models (Coqui XTTS v2, Meta MMS-TTS) where supported
 - **Hardware acceleration detection:** detects NVIDIA/AMD GPUs and PyTorch GPU acceleration availability (CUDA/ROCm) and uses GPU automatically for supported heavy engines when available
 - **Chapters:** automatic extraction/section detection, include/exclude, reorder, per-chapter audio output
-- **Output formats:** **MP3 (.mp3)** and **AAC (.m4a, iPhone-compatible)**
-  - Separate file per chapter and optional combined audiobook
+- **Output formats:** **MP3 (.mp3)**, **AAC (.m4a, iPhone-compatible)**, and **M4B (.m4b, audiobook)**
+  - Separate file per chapter and optional combined audiobook (MP3/M4A)
+  - **M4B (combined audiobook):** creates a single chaptered `.m4b` file with embedded chapter markers and audiobook metadata (title/author/language/genre). M4B export always produces a combined file (per-chapter AAC `.m4a` files may also be generated during processing)
   - Configurable bitrate/quality and chapter pause
-  - **AAC/M4A** output is recommended for direct copy to iPhone (Apple Books/Music/Files workflows)
+  - **AAC/M4A** output is recommended for direct copy to iPhone (Apple Books/Music/Files workflows); **M4B** is recommended for a chaptered audiobook in Apple Books or audiobook player apps on iPhone/iPad
+  - Embedding M4B chapter markers/metadata requires **FFmpeg** (recommended)
+- **Output/export helpers**
+  - Saves generated files to a user-selected output directory by default (current behavior preserved)
+  - Quick actions to open the output folder, reveal/copy paths, and optional post-export actions (copy generated files to another folder such as a synced/mounted device path, or run a custom command/script) without requiring direct device integration
 
 ### Recommended offline Piper voices (downloadable in-app)
 
@@ -53,7 +58,7 @@ This README explains how to **install and configure BookCoder on Debian**.
   - required for `pip install` dependencies (unless you provide wheels offline)
   - required for Edge online TTS synthesis/voice listing
   - required to download Piper offline voice models (one-time per model)
-- **FFmpeg** strongly recommended for best audio encoding/normalization and chapter/audio concatenation (MP3 and AAC/M4A)
+- **FFmpeg** strongly recommended for best audio encoding/normalization and chapter/audio concatenation (MP3, AAC/M4A, and M4B), and required for embedding M4B chapter markers/metadata reliably
 - **Calibre's `ebook-convert`** (optional, from package `calibre`) can improve AZW3/MOBI extraction/conversion compatibility
 - Disk space for Python packages and offline voice models (~60–100 MB per Piper voice)
 
@@ -302,7 +307,9 @@ When generating audio, you choose an output folder in the UI. If none is specifi
 
 Generated files typically include:
 - one audio file per selected chapter (`.mp3` or `.m4a`, depending on selected format)
-- optionally one combined audiobook file (`.mp3` or `.m4a`)
+- optionally one combined audiobook file (`.mp3` or `.m4a`, or `.m4b` for chaptered audiobook output)
+
+> When **M4B** output is selected, BookCoder produces a single combined `.m4b` audiobook with embedded chapter markers and metadata (and may also generate per-chapter `.m4a` source files during processing).
 
 ### 6.4 Network and engine behavior
 
@@ -415,15 +422,19 @@ python -m bookcoder --host 0.0.0.0 --port 8765 --no-browser
    - Preview voice and adjust speed/pitch/style
    - Optionally choose a dynamic tone profile, paragraph/sentence pause controls, dialogue/alternate dialogue voices (smart quote-span casting hooks), and pronunciation dictionary entries (with presets/import/export) for more expressive/accurate narration
 7. **Configure output**
-   - Output folder
-   - Output format: **MP3** or **AAC (.m4a)** (choose AAC/M4A for direct copy to iPhone)
-   - Audio quality (bitrate), chapter pause, optional combined file
+   - Output folder (default: generated files are saved locally to this directory)
+   - Output format: **MP3**, **AAC (.m4a)**, or **M4B (.m4b audiobook, chaptered combined file)**
+   - Audio quality (bitrate), chapter pause, optional combined file (for MP3/M4A). **M4B** always produces a single combined audiobook with chapter markers.
+   - (Optional) Post-export actions: copy generated files to another folder after generation (e.g. a synced cloud folder, NAS path, or mounted device folder) and/or run a custom command/script. These are **disabled by default**.
 8. **Generate audiobook** and monitor progress
+   - After generation, use the result actions to open the output folder, reveal/copy file paths, or transfer files using your preferred method.
 
-### iPhone output tip
+### iPhone/iPad output tips
 
-- Select **AAC (.m4a)** as the output format for best compatibility when copying files directly to an iPhone.
-- Generated chapter and/or combined `.m4a` files can be transferred to your device using your preferred method (e.g. Finder/AirDrop/iCloud Drive/Files workflows, depending on your setup).
+- **AAC (.m4a):** best for copying individual chapter files and/or a combined M4A file directly to iPhone/iPad (Files, Music, or Apple Books workflows depending on your setup).
+- **M4B (.m4b):** best for a single chaptered audiobook in **Apple Books** or audiobook player apps. BookCoder embeds chapter markers and audiobook metadata (title/author/language/genre) in the combined M4B (FFmpeg recommended/required for reliable chapter/metadata muxing).
+- M4B is an audiobook format (not a podcast RSS feed format). To listen on iPhone/iPad from a PC, transfer/import the `.m4b` into Apple Books or an audiobook app (e.g. via Finder/iTunes/Apple Devices sync, AirDrop, iCloud Drive/Files, or file sharing depending on your environment).
+- **BookCoder does not perform direct iPhone/Books device integration.** By default it saves audiobooks to your chosen output folder. You can optionally enable post-export copying to a destination folder (e.g. a synced/mounted path) or run a custom transfer command/script after generation.
 
 ---
 
@@ -551,13 +562,14 @@ systemctl --user disable --now bookcoder.service
   ```
 - DRM-protected Kindle books cannot be converted or narrated by BookCoder.
 
-### No audio / MP3 or M4A conversion issues / combine fails
-- Install FFmpeg (required/recommended for reliable encoding and format conversion):
+### No audio / MP3, M4A, or M4B conversion issues / combine fails / missing chapter markers
+- Install FFmpeg (required/recommended for reliable encoding, format conversion, audio combining, and M4B chapter/metadata embedding):
   ```bash
   sudo apt install -y ffmpeg
   ffmpeg -version | head -n 1
   ```
-- For iPhone-compatible output, choose **AAC (.m4a)** in the UI.
+- For iPhone-compatible output, choose **AAC (.m4a)** (chapter/combined files) or **M4B (.m4b)** (single chaptered audiobook) in the UI.
+- If an M4B file is created but chapters are missing, ensure FFmpeg is installed and up to date (chapter markers are muxed via FFmpeg metadata).
 - Restart BookCoder after installing FFmpeg.
 
 ### Edge TTS voices or synthesis fail

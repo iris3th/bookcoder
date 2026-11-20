@@ -2,6 +2,36 @@
 
 All notable changes to BookCoder are documented in this file.
 
+## [3.0.0] - 2026-11-20
+
+A major feature release adding chaptered M4B audiobook export and post-generation export helpers.
+
+### Added
+- **M4B audiobook output (`.m4b`)**
+  - Added **M4B** as an output format for audiobook workflows (recommended for chaptered audiobooks in Apple Books and compatible audiobook apps on iPhone/iPad).
+  - Combined M4B export embeds **chapter markers/titles** and audiobook metadata (title/album, author/artist, language, genre, comment) via FFmpeg metadata/chapter muxing when available.
+  - M4B export always produces a **single combined audiobook file** (`<Book title> - Complete Audiobook.m4b`) with embedded chapters; selecting M4B automatically enables/locks the “combine into one audiobook file” option in the UI and server-side generation flow.
+  - In M4B mode, per-chapter source audio may also be generated as AAC **`.m4a`** files during processing, while the final chaptered deliverable is the combined `.m4b`.
+  - `output_format`/settings handling updated to recognize and persist `m4b`.
+- **Output/export helpers (default save-to-directory behavior preserved)**
+  - Added UI actions to **open the output folder**, **reveal the combined file**, and **copy output/combined file paths** after successful generation.
+  - Added optional **post-export actions** (disabled by default):
+    - Copy generated chapter/combined files to another folder (e.g. synced cloud folder, NAS path, or mounted device folder) while keeping originals in the output folder.
+    - Run a custom post-export command/script in the output folder with environment variables: `BOOKCODER_OUTPUT_DIR`, `BOOKCODER_COMBINED_FILE`, `BOOKCODER_CHAPTER_FILES`.
+  - Added `POST /api/open-path` for local file-manager open/reveal actions and persisted post-export preferences in settings (`post_export`).
+  - Post-export summaries/errors are surfaced in generation results/UI; if post-export actions fail, generated audiobook files remain in the original output directory.
+- **UI version display**
+  - The running BookCoder package version is now shown discreetly in the web UI footer (e.g. `v3.0.0`), sourced from the application `__version__`.
+
+### Changed
+- Improved output/result and format-help messaging for **MP3/M4A/M4B** and iPhone/iPad transfer workflows (including Apple Books audiobook guidance), without adding direct iOS/Books device integration.
+- Updated audio/pipeline/UI/server behavior to support M4B format selection, combined-only M4B export, and chapter/metadata-aware final audiobook output.
+
+### Notes
+- **FFmpeg** is recommended for reliable AAC/M4A/M4B encoding and combining, and required for reliable M4B chapter marker/metadata embedding.
+- M4B is an audiobook container format (not a podcast RSS feed format). To listen on iPhone/iPad from a PC, transfer/import the generated `.m4b` into Apple Books or an audiobook app (e.g. Finder/iTunes/Apple Devices sync, AirDrop, iCloud Drive/Files, or file sharing).
+- Post-export actions are optional convenience helpers (copy/command hooks) and do not implement direct iPhone/Books device integration.
+
 ## [2.1.0] - 2026-11-19
 
 ### Fixed

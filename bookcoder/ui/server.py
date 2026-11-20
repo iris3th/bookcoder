@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import shlex
+import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import traceback
@@ -26,6 +31,7 @@ from ..core.models import Book, Chapter, Language, NarrationSettings, ProgressUp
 from ..core.pipeline import AudiobookPipeline, CancelledError, GenerationConfig, PipelineError
 from ..core.settings import SettingsStore
 from ..core.tts.registry import TTSRegistry
+from .. import __version__
 
 
 APP_TITLE = "BookCoder — AI Audiobook Studio"
@@ -44,7 +50,7 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        return render_template("index.html", app_title=APP_TITLE)
+        return render_template("index.html", app_title=APP_TITLE, app_version=__version__)
 
     @app.get("/api/health")
     def health():
@@ -98,7 +104,12 @@ def create_app() -> Flask:
         lang = _parse_language(request.args.get("language"))
         ns = state.settings_store.get_narration_settings(lang)
         data = _settings_to_json(ns)
-        return jsonify({"ok": True, "settings": data, "last_output_dir": state.settings_store.get("last_output_dir", "")})
+        return jsonify({
+            "ok": True,
+            "settings": data,
+            "last_output_dir": state.settings_store.get("last_output_dir", ""),
+            "post_export": _get_post_export_settings(state),
+        })
 
     @app.post("/api/settings")
     def save_settings():
@@ -108,6 +119,25 @@ def create_app() -> Flask:
         state.settings_store.save_narration_settings(ns, lang)
         if "last_output_dir" in payload and isinstance(payload["last_output_dir"], str):
             state.settings_store.set("last_output_dir", payload["last_output_dir"])
+        post = payload.get("post_export")
+        if isinstance(post, dict):
+            if "copy_enabled" in post:
+                state.settings_store.set("post_export_copy_enabled", bool(post.get("copy_enabled")))
+            if "copy_dir" in post and isinstance(post.get("copy_dir"), str):
+                state.settings_store.set("post_export_copy_dir", post.get("copy_dir").strip())
+            if "run_command_enabled" in post:
+                state.settings_store.set("post_export_run_command_enabled", bool(post.get("run_command_enabled")))
+            if "command" in post and isinstance(post.get("command"), str):
+                state.settings_store.set("post_export_command", post.get("command"))
+        # Also accept flat keys for convenience/backward-compatible payload shapes
+        if "post_export_copy_enabled" in payload:
+            state.settings_store.set("post_export_copy_enabled", bool(payload.get("post_export_copy_enabled")))
+        if "post_export_copy_dir" in payload and isinstance(payload.get("post_export_copy_dir"), str):
+            state.settings_store.set("post_export_copy_dir", payload.get("post_export_copy_dir").strip())
+        if "post_export_run_command_enabled" in payload:
+            state.settings_store.set("post_export_run_command_enabled", bool(payload.get("post_export_run_command_enabled")))
+        if "post_export_command" in payload and isinstance(payload.get("post_export_command"), str):
+            state.settings_store.set("post_export_command", payload.get("post_export_command"))
         return jsonify({"ok": True})
 
     @app.get("/api/offline-models")
@@ -532,6 +562,9 @@ def create_app() -> Flask:
         bitrate = int(_to_float(payload.get("bitrate_kbps"), 128))
         bitrate = 64 if bitrate < 64 else min(bitrate, 320)
         combine = bool(payload.get("combine", False))
+        # M4B is an audiobook container best suited for a single combined file with chapter markers.
+        if output_format == "m4b":
+            combine = True
         pause_ms = int(_to_float(payload.get("chapter_pause_ms"), 1200))
 
         out_dir_raw = payload.get("output_dir")
@@ -666,6 +699,31 @@ def create_app() -> Flask:
             return jsonify({"ok": False, "error": "Job not found."}), 404
         return jsonify({"ok": True, "status": job.status, "result": job.result, "error": job.error, "messages": list(job.messages)[-50:]})
 
+    @app.post("/api/open-path")
+    def open_path():
+        payload = request.get_json(silent=True) or {}
+        raw = payload.get("path")
+        if not isinstance(raw, str) or not raw.strip():
+            return jsonify({"ok": False, "error": "Missing path."}), 400
+        try:
+            p = Path(os.path.expanduser(raw.strip()))
+        except Exception:
+            return jsonify({"ok": False, "error": "Invalid path."}), 400
+        reveal = bool(payload.get("reveal", False))
+        target = p
+        if reveal and p.is_file():
+            target = p.parent
+        if not target.exists():
+            return jsonify({"ok": False, "error": "Path does not exist."}), 404
+        if not target.is_dir():
+            # If not revealing and it's a file, try to open the file itself; if that fails fallback to parent
+            pass
+        try:
+            _open_in_file_manager(target, reveal_file=p if (reveal and p.is_file()) else None)
+            return jsonify({"ok": True})
+        except Exception as e:
+            return jsonify({"ok": False, "error": f"Failed to open path: {e}"}), 500
+
     return app
 
 
@@ -724,7 +782,30 @@ def _run_generation_job(state: AppState, job: Job, book: Book, config: Generatio
             "chapter_files": [str(p) for p in result.chapter_files],
             "combined_file": str(result.combined_file) if result.combined_file else None,
         }
-        job.queue.put({"type": "done", "message": "Generation complete.", "result": job.result})
+
+        # Optional post-export actions (copy/run command). These run after successful generation.
+        try:
+            post_settings = _get_post_export_settings(state)
+            post_result = _perform_post_export_actions(state, job, job.result, post_settings)
+            if post_result:
+                job.result["post_export"] = post_result
+                # Surface a brief summary in the final progress/done context
+                summary = post_result.get("summary")
+                if summary:
+                    job.messages.append(summary)
+        except Exception as pe:
+            traceback.print_exc()
+            job.result["post_export"] = {"ok": False, "summary": f"Post-export actions failed: {pe}", "errors": [str(pe)]}
+            job.messages.append(f"Post-export actions failed: {pe}")
+
+        done_message = "Generation complete."
+        try:
+            pes = job.result.get("post_export") or {}
+            if isinstance(pes, dict) and pes.get("summary"):
+                done_message = f"Generation complete. {pes.get('summary')}"
+        except Exception:
+            pass
+        job.queue.put({"type": "done", "message": done_message, "result": job.result})
     except CancelledError:
         job.status = "cancelled"
         job.queue.put({"type": "cancelled", "message": "Generation cancelled."})
@@ -737,9 +818,190 @@ def _run_generation_job(state: AppState, job: Job, book: Book, config: Generatio
 
 # ------------------ helpers ------------------
 
-def _download_progress_key(provider_id: str, key: str) -> str:
-    pid = (provider_id or "piper").strip() or "piper"
-    return f"{pid}:{key}"
+def _get_post_export_settings(state: AppState) -> dict:
+    return {
+        "copy_enabled": bool(state.settings_store.get("post_export_copy_enabled", False)),
+        "copy_dir": str(state.settings_store.get("post_export_copy_dir", "") or "").strip(),
+        "run_command_enabled": bool(state.settings_store.get("post_export_run_command_enabled", False)),
+        "command": str(state.settings_store.get("post_export_command", "") or ""),
+    }
+
+
+def _perform_post_export_actions(state: AppState, job: Job, result: dict, settings: dict) -> Optional[dict]:
+    copy_enabled = bool(settings.get("copy_enabled"))
+    copy_dir_raw = str(settings.get("copy_dir") or "").strip()
+    run_cmd_enabled = bool(settings.get("run_command_enabled"))
+    command = str(settings.get("command") or "")
+
+    if not copy_enabled and not run_cmd_enabled:
+        return None
+
+    output_dir = str(result.get("output_dir") or "").strip()
+    combined_file = str(result.get("combined_file") or "").strip() or None
+    chapter_files = [str(p) for p in (result.get("chapter_files") or []) if str(p).strip()]
+
+    # Build list of generated files (dedup, existing)
+    files: list[str] = []
+    seen = set()
+    for p in chapter_files + ([combined_file] if combined_file else []):
+        if not p:
+            continue
+        try:
+            rp = str(Path(p))
+        except Exception:
+            rp = p
+        if rp in seen:
+            continue
+        seen.add(rp)
+        if Path(rp).exists():
+            files.append(rp)
+
+    post: dict[str, Any] = {
+        "ok": True,
+        "copy": None,
+        "command": None,
+        "copied_files": [],
+        "errors": [],
+        "summary": "",
+    }
+    summaries: list[str] = []
+
+    def emit(msg: str, stage: str = "post-export", fraction: float = 0.995):
+        try:
+            job.messages.append(msg)
+            job.queue.put({
+                "type": "progress",
+                "stage": stage,
+                "message": msg,
+                "current": 0,
+                "total": 0,
+                "chapter_title": "",
+                "fraction": fraction,
+            })
+        except Exception:
+            pass
+
+    # 1) Copy files
+    if copy_enabled:
+        if not copy_dir_raw:
+            post["errors"].append("Post-export copy is enabled but no destination folder was set.")
+            post["copy"] = {"ok": False, "destination": "", "copied": 0, "error": "No destination folder set."}
+        else:
+            try:
+                dest = Path(os.path.expanduser(copy_dir_raw)).resolve()
+                emit(f"Copying generated files to {dest}...")
+                dest.mkdir(parents=True, exist_ok=True)
+                copied = 0
+                copy_errors = []
+                for src in files:
+                    try:
+                        src_p = Path(src)
+                        if not src_p.exists() or not src_p.is_file():
+                            continue
+                        target = dest / src_p.name
+                        if src_p.resolve() == target.resolve():
+                            # already in destination
+                            continue
+                        shutil.copy2(src_p, target)
+                        copied += 1
+                        post["copied_files"].append(str(target))
+                    except Exception as ce:
+                        copy_errors.append(f"{Path(src).name}: {ce}")
+                if copy_errors:
+                    post["errors"].extend([f"Copy: {e}" for e in copy_errors])
+                copy_ok = copied > 0 or (len(files) == 0)
+                # If destination same as output, treat as ok/no-op
+                try:
+                    out_resolved = Path(output_dir).resolve() if output_dir else None
+                    if out_resolved and out_resolved == dest and copied == 0 and not copy_errors:
+                        copy_ok = True
+                except Exception:
+                    pass
+                post["copy"] = {"ok": copy_ok and not copy_errors, "destination": str(dest), "copied": copied, "errors": copy_errors}
+                if copied > 0:
+                    summaries.append(f"Copied {copied} file(s) to {dest}.")
+                elif not copy_errors:
+                    summaries.append(f"Post-export copy destination: {dest} (no files needed copying).")
+                else:
+                    summaries.append(f"Post-export copy completed with errors ({copied} copied).")
+            except Exception as e:
+                traceback.print_exc()
+                post["errors"].append(f"Copy failed: {e}")
+                post["copy"] = {"ok": False, "destination": copy_dir_raw, "copied": 0, "error": str(e)}
+                summaries.append(f"Post-export copy failed: {e}")
+
+    # 2) Run custom command
+    if run_cmd_enabled:
+        cmd = command.strip()
+        if not cmd:
+            post["errors"].append("Post-export command is enabled but empty.")
+            post["command"] = {"ok": False, "error": "Command is empty."}
+        else:
+            try:
+                emit("Running post-export command...")
+                env = os.environ.copy()
+                env["BOOKCODER_OUTPUT_DIR"] = output_dir
+                env["BOOKCODER_COMBINED_FILE"] = combined_file or ""
+                env["BOOKCODER_CHAPTER_FILES"] = os.pathsep.join(chapter_files)
+                cwd = output_dir or None
+                proc = subprocess.run(
+                    cmd,
+                    shell=True,
+                    cwd=cwd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                )
+                stdout = (proc.stdout or "").strip()
+                stderr = (proc.stderr or "").strip()
+                cmd_ok = proc.returncode == 0
+                post["command"] = {
+                    "ok": cmd_ok,
+                    "returncode": proc.returncode,
+                    "stdout": stdout[-4000:] if stdout else "",
+                    "stderr": stderr[-4000:] if stderr else "",
+                }
+                if cmd_ok:
+                    summaries.append("Post-export command completed successfully.")
+                else:
+                    post["errors"].append(f"Post-export command exited with code {proc.returncode}.")
+                    summaries.append(f"Post-export command failed (exit {proc.returncode}).")
+            except subprocess.TimeoutExpired:
+                post["errors"].append("Post-export command timed out (300s).")
+                post["command"] = {"ok": False, "error": "Timed out after 300 seconds."}
+                summaries.append("Post-export command timed out.")
+            except Exception as e:
+                traceback.print_exc()
+                post["errors"].append(f"Post-export command failed: {e}")
+                post["command"] = {"ok": False, "error": str(e)}
+                summaries.append(f"Post-export command failed: {e}")
+
+    post["summary"] = " ".join(summaries).strip()
+    if post["errors"]:
+        post["ok"] = False
+    return post
+
+
+def _open_in_file_manager(target_dir: Path, reveal_file: Optional[Path] = None) -> None:
+    target_dir = Path(target_dir)
+    if not target_dir.exists():
+        raise FileNotFoundError(str(target_dir))
+    if sys.platform.startswith("win"):
+        if reveal_file and Path(reveal_file).exists():
+            subprocess.Popen(["explorer", f'/select,{str(Path(reveal_file))}'])
+        else:
+            os.startfile(str(target_dir))  # type: ignore[attr-defined]
+        return
+    if sys.platform == "darwin":
+        if reveal_file and Path(reveal_file).exists():
+            subprocess.Popen(["open", "-R", str(Path(reveal_file))])
+        else:
+            subprocess.Popen(["open", str(target_dir)])
+        return
+    # Linux / other: try to open directory (revealing a specific file varies by file manager)
+    open_target = target_dir if target_dir.is_dir() else target_dir.parent
+    subprocess.Popen(["xdg-open", str(open_target)])
 
 
 def _offline_model_managers(state: AppState, provider_filter: Optional[str] = None):

@@ -267,16 +267,20 @@
         <div class="grid-2">
           <div class="field">
             <label for="outputDir">Output folder</label>
-            <input id="outputDir" class="input" type="text" placeholder="~/BookCoderAudiobooks/..." />
-            <div class="help-text">Chapter audio files and optional combined audiobook will be saved here.</div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <input id="outputDir" class="input" type="text" placeholder="~/BookCoderAudiobooks/..." />
+              <button id="openOutputDirBtn" class="btn btn-secondary btn-sm" type="button" title="Open output folder in your file manager">Open</button>
+            </div>
+            <div class="help-text">Chapter audio files and optional combined audiobook will be saved here. Default behavior is to save generated files to this local directory.</div>
           </div>
           <div class="field">
             <label for="outputFormat">Output format</label>
             <select id="outputFormat" class="input">
               <option value="mp3" selected>MP3 (.mp3) — widely compatible</option>
               <option value="m4a">AAC (.m4a) — recommended for iPhone (direct copy)</option>
+              <option value="m4b">M4B (.m4b) — audiobook with chapter markers (single combined file)</option>
             </select>
-            <div class="help-text">M4A (AAC) is ideal for copying directly to iPhone/Apple Books or Music.</div>
+            <div class="help-text" id="outputFormatHelp">M4A (AAC) is ideal for copying directly to iPhone/Apple Books or Music. M4B is best for a chaptered audiobook in Apple Books/audiobook apps (combined file only).</div>
           </div>
         </div>
 
@@ -301,11 +305,30 @@
         <div class="grid-2">
           <div class="field checkbox-field">
             <label><input id="combineChk" type="checkbox" /> Also combine all chapters into one audiobook file</label>
-            <div class="help-text">Creates a single complete audiobook file in addition to per-chapter files.</div>
+            <div class="help-text" id="combineHelp">Creates a single complete audiobook file in addition to per-chapter files. M4B output always creates a single combined audiobook with chapter markers.</div>
           </div>
           <div class="field">
             <label>iPhone tip</label>
-            <div class="value-box">For direct iPhone use, select <strong>AAC (.m4a)</strong> output, then copy the generated files to your device.</div>
+            <div class="value-box">For direct iPhone use, select <strong>AAC (.m4a)</strong> for files/folders or <strong>M4B</strong> for a single chaptered audiobook in Apple Books. Copy/transfer the generated file(s) to your device.</div>
+          </div>
+        </div>
+
+        <div class="grid-2" id="postExportSection" style="margin-top: 4px;">
+          <div class="field">
+            <label>Post-export actions (optional)</label>
+            <div class="checkbox-field" style="margin-bottom:8px;">
+              <label><input id="postExportCopyChk" type="checkbox" /> Copy generated files to another folder after generation</label>
+            </div>
+            <input id="postExportCopyDir" class="input" type="text" placeholder="e.g. ~/Audiobooks/Sync or /mnt/device/Audiobooks" disabled />
+            <div class="help-text">Copies generated chapter/combined files to this destination (originals remain in the output folder). Useful for synced folders, NAS paths, or mounted device folders. Disabled by default.</div>
+          </div>
+          <div class="field">
+            <label for="postExportCommand">Custom post-export command (advanced, optional)</label>
+            <div class="checkbox-field" style="margin-bottom:8px;">
+              <label><input id="postExportRunCmdChk" type="checkbox" /> Run a command after successful generation</label>
+            </div>
+            <input id="postExportCommand" class="input" type="text" placeholder="Optional shell command/script" disabled />
+            <div class="help-text">Runs in the output folder after generation. Env vars: <code>BOOKCODER_OUTPUT_DIR</code>, <code>BOOKCODER_COMBINED_FILE</code>, <code>BOOKCODER_CHAPTER_FILES</code>. Leave disabled to keep default save-to-directory behavior.</div>
           </div>
         </div>
 
@@ -329,7 +352,8 @@
     </main>
 
     <footer class="footer">
-      <span>BookCoder generates natural-sounding audiobooks (MP3 or AAC/M4A) from EPUB, MOBI, AZW3, and TXT with English & Hungarian narration (online and offline models).</span>
+      <span>BookCoder generates natural-sounding audiobooks (MP3, AAC/M4A, M4B) from EPUB, MOBI, AZW3, and TXT with English & Hungarian narration (online and offline models).</span>
+      <div class="app-version">v{{ app_version }}</div>
     </footer>
   </div>
 

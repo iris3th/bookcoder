@@ -74,8 +74,10 @@
 
   const outputDir = $("outputDir");
   const outputFormat = $("outputFormat");
+  const outputFormatHelp = $("outputFormatHelp");
   const bitrateSelect = $("bitrateSelect");
   const combineChk = $("combineChk");
+  const combineHelp = $("combineHelp");
   const pauseRange = $("pauseRange");
   const pauseValue = $("pauseValue");
   const generateBtn = $("generateBtn");
@@ -103,6 +105,8 @@
   function init() {
     bindEvents();
     updateRangeLabels();
+    syncOutputFormatUI();
+    syncPostExportUI();
     setChaptersExpanded(false);
     setOfflineModelsExpanded(false);
     loadHardwareInfo();
@@ -112,6 +116,40 @@
         loadOfflineModels();
       });
     });
+  }
+
+  function syncOutputFormatUI() {
+    if (!outputFormat || !combineChk) return;
+    const fmt = String(outputFormat.value || 'mp3').toLowerCase();
+    if (fmt === 'm4b') {
+      if (!combineChk.dataset.prevChecked) {
+        combineChk.dataset.prevChecked = combineChk.checked ? '1' : '0';
+      }
+      combineChk.checked = true;
+      combineChk.disabled = true;
+      if (combineHelp) {
+        combineHelp.textContent = 'M4B exports a single combined audiobook file with embedded chapter markers. (Per-chapter source audio may also be generated in M4A during processing.)';
+      }
+      if (outputFormatHelp) {
+        outputFormatHelp.textContent = 'M4B is best for audiobooks in Apple Books and many audiobook apps. It creates one chaptered .m4b file (combined output).';
+      }
+    } else {
+      combineChk.disabled = false;
+      if (combineChk.dataset.prevChecked) {
+        combineChk.checked = combineChk.dataset.prevChecked === '1';
+        delete combineChk.dataset.prevChecked;
+      }
+      if (combineHelp) {
+        combineHelp.textContent = 'Creates a single complete audiobook file in addition to per-chapter files. M4B output always creates a single combined audiobook with chapter markers.';
+      }
+      if (outputFormatHelp) {
+        if (fmt === 'm4a') {
+          outputFormatHelp.textContent = 'M4A (AAC) is ideal for copying directly to iPhone/Apple Books or Music.';
+        } else {
+          outputFormatHelp.textContent = 'MP3 is widely compatible. M4A (AAC) is recommended for iPhone. M4B creates a single chaptered audiobook file.';
+        }
+      }
+    }
   }
 
   async function loadHardwareInfo() {
@@ -193,10 +231,17 @@
     modelLanguageFilter.addEventListener("change", () => loadOfflineModels());
     modelGenderFilter.addEventListener("change", () => renderOfflineModels());
 
-    [speedRange, pitchRange, styleSelect, toneProfileSelect, dialogueVoiceSelect, dialogueVoiceAltSelect, paragraphPauseRange, sentencePauseChk, pronunciationMapInput, outputFormat, bitrateSelect, combineChk, pauseRange, outputDir].forEach(el => {
+    [speedRange, pitchRange, styleSelect, toneProfileSelect, dialogueVoiceSelect, dialogueVoiceAltSelect, paragraphPauseRange, sentencePauseChk, pronunciationMapInput, bitrateSelect, combineChk, pauseRange, outputDir].forEach(el => {
       if (!el) return;
       el.addEventListener("change", () => saveSettings());
     });
+
+    if (outputFormat) {
+      outputFormat.addEventListener("change", () => {
+        syncOutputFormatUI();
+        saveSettings();
+      });
+    }
 
     if (pronunciationPresetSelect) {
       pronunciationPresetSelect.addEventListener("change", () => {
@@ -340,9 +385,13 @@
       if (res.ok && res.settings) {
         applySettings(res.settings);
       }
+      if (res && res.post_export) {
+        applyPostExportSettings(res.post_export);
+      }
       if (res.last_output_dir && !outputDir.value) {
         outputDir.value = res.last_output_dir;
       }
+      syncPostExportUI();
     } catch (e) { /* ignore */ }
   }
 
@@ -1304,6 +1353,7 @@
 
     await saveSettings();
 
+    const selectedOutputFormat = (outputFormat && outputFormat.value) ? outputFormat.value : 'mp3';
     const payload = {
       book_id: state.book.id,
       language: getEffectiveLanguage(),
@@ -1320,9 +1370,9 @@
       sentence_pause_hint: sentencePauseChk ? !!sentencePauseChk.checked : ((state.settings && typeof state.settings.sentence_pause_hint === 'boolean') ? state.settings.sentence_pause_hint : true),
       pronunciation_map: pronunciationMapInput ? parsePronunciationMapText(pronunciationMapInput.value) : ((state.settings && state.settings.pronunciation_map) || {}),
       output_dir: outputDir.value,
-      output_format: (outputFormat && outputFormat.value) ? outputFormat.value : 'mp3',
+      output_format: selectedOutputFormat,
       bitrate_kbps: parseInt(bitrateSelect.value, 10) || 128,
-      combine: !!combineChk.checked,
+      combine: selectedOutputFormat === 'm4b' ? true : !!combineChk.checked,
       chapter_pause_ms: parseInt(pauseRange.value, 10) || 1200,
       chapters: state.book.chapters.map(c => ({ id: c.id, included: !!c.included })),
     };
@@ -1426,25 +1476,76 @@
     const combined = result.combined_file;
     const outDir = result.output_dir || outputDir.value || '';
     const sample = (files && files.length ? files[0] : (combined || '')) || '';
-    const isM4a = /\.m4a$/i.test(sample) || ((outputFormat && outputFormat.value) === 'm4a');
-    const fmtLabel = isM4a ? 'AAC (M4A)' : 'MP3';
-    const extLabel = isM4a ? '.m4a' : '.mp3';
+    const isM4b = /\.m4b$/i.test(combined || '') || ((outputFormat && outputFormat.value) === 'm4b');
+    const isM4aChapter = /\.m4a$/i.test(sample);
+    const isM4a = !isM4b && (isM4aChapter || ((outputFormat && outputFormat.value) === 'm4a'));
+    const fmtLabel = isM4b ? 'M4A (AAC, per-chapter) / M4B (combined audiobook)' : (isM4a ? 'AAC (M4A)' : 'MP3');
+    const extLabel = isM4b ? '.m4a (chapters), .m4b (combined)' : (isM4a ? '.m4a' : '.mp3');
 
     let html = `<h3>✓ Audiobook generated successfully</h3>`;
-    html += `<div>Output folder: <code>${escapeHtml(outDir)}</code></div>`;
-    html += `<ul>`;
-    html += `<li>${files.length} chapter audio file(s) created (${fmtLabel}, ${extLabel}).</li>`;
+    html += `<div>Output folder: <code id="resultOutDir">${escapeHtml(outDir)}</code></div>`;
+    html += `<div class="result-actions" style="display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 6px;">`;
+    html += `<button id="resultOpenDirBtn" class="btn btn-secondary btn-sm" type="button" ${outDir ? '' : 'disabled'}>Open output folder</button>`;
     if (combined) {
-      html += `<li>Combined audiobook: <code>${escapeHtml(basename(combined))}</code></li>`;
+      html += `<button id="resultRevealCombinedBtn" class="btn btn-secondary btn-sm" type="button">Reveal combined file</button>`;
     }
-    if (isM4a) {
-      html += `<li>Audio encoded as AAC in an M4A container for direct copy to iPhone.</li>`;
+    html += `<button id="resultCopyDirBtn" class="btn btn-secondary btn-sm" type="button" ${outDir ? '' : 'disabled'}>Copy output path</button>`;
+    if (combined) {
+      html += `<button id="resultCopyCombinedBtn" class="btn btn-secondary btn-sm" type="button">Copy combined file path</button>`;
+    }
+    html += `</div>`;
+    html += `<ul>`;
+    if (isM4b) {
+      html += `<li>${files.length} per-chapter audio file(s) created (AAC, .m4a).</li>`;
+    } else {
+      html += `<li>${files.length} chapter audio file(s) created (${fmtLabel}, ${extLabel}).</li>`;
+    }
+    if (combined) {
+      html += `<li>Combined audiobook: <code>${escapeHtml(basename(combined))}</code>${isM4b ? ' (M4B with embedded chapter markers)' : ''}</li>`;
+    }
+    if (isM4b) {
+      html += `<li>Combined M4B includes chapter markers and audiobook metadata (title/author/language/genre) for Apple Books and compatible audiobook apps.</li>`;
+      html += `<li>To use on iPhone/iPad: transfer the .m4b file to Apple Books (recommended) or an audiobook app/player that supports M4B chapters (via Finder/iTunes/Apple Devices sync, AirDrop, iCloud Drive/Files, etc.).</li>`;
+    } else if (isM4a) {
+      html += `<li>Audio encoded as AAC in an M4A container for direct copy to iPhone/iPad.</li>`;
     } else {
       html += `<li>Audio encoded for high-quality audiobook playback (MP3).</li>`;
     }
     html += `</ul>`;
+
+    const post = result.post_export || null;
+    if (post && (post.summary || (Array.isArray(post.errors) && post.errors.length) || post.copy || post.command)) {
+      const ok = post.ok !== false && !(Array.isArray(post.errors) && post.errors.length);
+      html += `<div class="help-text" style="margin-top:10px;"><strong>Post-export:</strong> ${escapeHtml(post.summary || (ok ? 'Completed.' : 'Completed with issues.'))}</div>`;
+      if (post.copy && post.copy.destination) {
+        html += `<div class="help-text">Copy destination: <code>${escapeHtml(String(post.copy.destination))}</code>${typeof post.copy.copied === 'number' ? ` • ${post.copy.copied} file(s) copied` : ''}</div>`;
+      }
+      if (Array.isArray(post.errors) && post.errors.length) {
+        html += `<ul style="margin-top:6px; color:#ffd7db;">`;
+        post.errors.slice(0, 5).forEach(err => { html += `<li>${escapeHtml(String(err))}</li>`; });
+        html += `</ul>`;
+      }
+    }
+
     resultBox.innerHTML = html;
     resultBox.classList.remove('hidden');
+
+    const openDirBtn = $("resultOpenDirBtn");
+    if (openDirBtn) openDirBtn.addEventListener("click", async () => {
+      try { await openPath(outDir, false); } catch (e) { showGenError(e.message || String(e)); }
+    });
+    const revealCombinedBtn = $("resultRevealCombinedBtn");
+    if (revealCombinedBtn && combined) revealCombinedBtn.addEventListener("click", async () => {
+      try { await openPath(combined, true); } catch (e) { showGenError(e.message || String(e)); }
+    });
+    const copyDirBtn = $("resultCopyDirBtn");
+    if (copyDirBtn) copyDirBtn.addEventListener("click", async () => {
+      try { await copyToClipboard(outDir); setProgress(null, stageName('done'), 'Output folder path copied to clipboard.'); } catch (e) { showGenError(e.message || String(e)); }
+    });
+    const copyCombinedBtn = $("resultCopyCombinedBtn");
+    if (copyCombinedBtn && combined) copyCombinedBtn.addEventListener("click", async () => {
+      try { await copyToClipboard(combined); setProgress(null, stageName('done'), 'Combined file path copied to clipboard.'); } catch (e) { showGenError(e.message || String(e)); }
+    });
   }
 
   function resetGenerationUI() {
@@ -1514,6 +1615,12 @@
       const sentencePauseHint = sentencePauseChk ? !!sentencePauseChk.checked : ((state.settings && typeof state.settings.sentence_pause_hint === 'boolean') ? state.settings.sentence_pause_hint : true);
       const pronunciationMap = pronunciationMapInput ? parsePronunciationMapText(pronunciationMapInput.value) : ((state.settings && state.settings.pronunciation_map) || {});
       const voiceCastMap = buildVoiceCastMap();
+      const postExport = {
+        copy_enabled: !!(postExportCopyChk && postExportCopyChk.checked),
+        copy_dir: postExportCopyDir ? (postExportCopyDir.value || '') : '',
+        run_command_enabled: !!(postExportRunCmdChk && postExportRunCmdChk.checked),
+        command: postExportCommand ? (postExportCommand.value || '') : '',
+      };
       const settings = {
         provider_id: state.selectedProviderId,
         language: getEffectiveLanguage(),
@@ -1533,9 +1640,11 @@
         combine_into_single_file: !!combineChk.checked,
         chapter_pause_ms: parseInt(pauseRange.value, 10) || 1200,
         last_output_dir: outputDir.value,
+        post_export: postExport,
       };
       await fetchJSON('/api/settings', { method: 'POST', body: settings });
       state.settings = Object.assign({}, state.settings || {}, settings);
+      state.postExport = Object.assign({}, state.postExport || {}, postExport);
     } catch (e) { /* non-fatal */ }
   }
 
@@ -1551,7 +1660,9 @@
     if (s.pronunciation_map && pronunciationMapInput) pronunciationMapInput.value = formatPronunciationMapText(s.pronunciation_map);
     if (s.output_format && outputFormat) {
       const fmt = String(s.output_format).toLowerCase();
-      outputFormat.value = (fmt === 'm4a' || fmt === 'aac' || fmt === 'mp4') ? 'm4a' : 'mp3';
+      if (fmt === 'm4b' || fmt === 'audiobook') outputFormat.value = 'm4b';
+      else if (fmt === 'm4a' || fmt === 'aac' || fmt === 'mp4') outputFormat.value = 'm4a';
+      else outputFormat.value = 'mp3';
     }
     if (s.output_bitrate_kbps) bitrateSelect.value = String(s.output_bitrate_kbps);
     if (typeof s.combine_into_single_file === 'boolean') combineChk.checked = s.combine_into_single_file;
@@ -1570,7 +1681,26 @@
       if (!state._pendingDialogueVoiceId && s.voice_cast_map.dialogue) state._pendingDialogueVoiceId = s.voice_cast_map.dialogue;
       if (!state._pendingDialogueVoiceAltId && s.voice_cast_map.dialogue_alt) state._pendingDialogueVoiceAltId = s.voice_cast_map.dialogue_alt;
     }
+    syncOutputFormatUI();
+    syncPostExportUI();
     updateRangeLabels();
+  }
+
+  function applyPostExportSettings(pe) {
+    if (!pe) return;
+    state.postExport = Object.assign({}, state.postExport || {}, pe);
+    if (postExportCopyChk && typeof pe.copy_enabled === 'boolean') postExportCopyChk.checked = pe.copy_enabled;
+    if (postExportCopyDir && typeof pe.copy_dir === 'string') postExportCopyDir.value = pe.copy_dir;
+    if (postExportRunCmdChk && typeof pe.run_command_enabled === 'boolean') postExportRunCmdChk.checked = pe.run_command_enabled;
+    if (postExportCommand && typeof pe.command === 'string') postExportCommand.value = pe.command;
+    syncPostExportUI();
+  }
+
+  function syncPostExportUI() {
+    const copyEnabled = !!(postExportCopyChk && postExportCopyChk.checked);
+    if (postExportCopyDir) postExportCopyDir.disabled = !copyEnabled;
+    const cmdEnabled = !!(postExportRunCmdChk && postExportRunCmdChk.checked);
+    if (postExportCommand) postExportCommand.disabled = !cmdEnabled;
   }
 
   function showUploadError(msg) { uploadError.textContent = msg; uploadError.classList.remove('hidden'); }
@@ -1609,6 +1739,36 @@
   }
   function basename(p) { if (!p) return ''; return p.split(/[/\\]/).pop(); }
   function escapeHtml(s) { return String(s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  async function openPath(path, reveal = false) {
+    const p = (path || '').trim();
+    if (!p) throw new Error('No path provided.');
+    const res = await fetchJSON('/api/open-path', { method: 'POST', body: { path: p, reveal: !!reveal } });
+    if (!res.ok) throw new Error(res.error || 'Failed to open path.');
+    return res;
+  }
+
+  async function copyToClipboard(text) {
+    const t = String(text || '');
+    if (!t) throw new Error('Nothing to copy.');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(t);
+      return;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = t;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      const ok = document.execCommand('copy');
+      if (!ok) throw new Error('Copy command failed.');
+    } finally {
+      document.body.removeChild(ta);
+    }
+  }
 
   document.addEventListener('DOMContentLoaded', init);
 })();

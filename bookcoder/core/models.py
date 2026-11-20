@@ -116,7 +116,7 @@ class NarrationSettings:
     pitch: float = 0.0  # semitones or provider-specific units
     style: str = "Natural Audiobook Narration"
     volume_gain_db: float = 0.0
-    output_format: str = "mp3"  # "mp3" or "m4a" (AAC), iPhone-compatible
+    output_format: str = "mp3"  # "mp3", "m4a" (AAC), or "m4b" (combined audiobook with chapters)
     output_bitrate_kbps: int = 128
     combine_into_single_file: bool = False
     chapter_pause_ms: int = 1200

@@ -17,17 +17,29 @@ def ensure_ffmpeg() -> Optional[str]:
 
 def normalize_output_format(fmt: Optional[str]) -> str:
     f = (fmt or "mp3").strip().lower()
+    if f in ("m4b", "audiobook"):
+        return "m4b"
     if f in ("m4a", "aac", "mp4", "ipod"):
         return "m4a"
     return "mp3"
 
 
 def extension_for_format(fmt: Optional[str]) -> str:
-    return ".m4a" if normalize_output_format(fmt) == "m4a" else ".mp3"
+    nf = normalize_output_format(fmt)
+    if nf == "m4b":
+        return ".m4b"
+    if nf == "m4a":
+        return ".m4a"
+    return ".mp3"
 
 
 def format_label(fmt: Optional[str]) -> str:
-    return "AAC (M4A)" if normalize_output_format(fmt) == "m4a" else "MP3"
+    nf = normalize_output_format(fmt)
+    if nf == "m4b":
+        return "M4B (Audiobook, AAC)"
+    if nf == "m4a":
+        return "AAC (M4A)"
+    return "MP3"
 
 
 def _clamp_bitrate(bitrate_kbps: int) -> int:
@@ -41,8 +53,8 @@ def _clamp_bitrate(bitrate_kbps: int) -> int:
 def _ffmpeg_encode_args(output_path: Path, bitrate_kbps: int, sample_rate: int) -> list[str]:
     fmt = normalize_output_format(output_path.suffix.lstrip("."))
     b = _clamp_bitrate(bitrate_kbps)
-    if fmt == "m4a":
-        # AAC in M4A container for broad iPhone compatibility
+    if fmt in ("m4a", "m4b"):
+        # AAC in M4A/M4B container for broad iPhone/Apple Books compatibility
         return [
             "-vn",
             "-c:a", "aac",
@@ -66,8 +78,8 @@ def _pydub_export(seg, output_path: Path, bitrate_kbps: int, sample_rate: int) -
     fmt = normalize_output_format(output_path.suffix.lstrip("."))
     b = _clamp_bitrate(bitrate_kbps)
     try:
-        if fmt == "m4a":
-            # Prefer 'ipod' for .m4a AAC output via ffmpeg
+        if fmt in ("m4a", "m4b"):
+            # Prefer 'ipod' for .m4a/.m4b AAC output via ffmpeg
             try:
                 seg.export(
                     str(output_path),
@@ -142,8 +154,8 @@ def normalize_audio(
         except Exception:
             pass
 
-        # Extra fallback for m4a: try without faststart/movflags ordering issues are rare, but try simpler
-        if fmt == "m4a":
+        # Extra fallback for AAC containers (M4A/M4B): try simpler args
+        if fmt in ("m4a", "m4b"):
             cmd2 = [
                 ffmpeg, "-y", "-i", str(input_path),
                 "-vn", "-c:a", "aac", "-b:a", f"{bitrate_kbps}k",
@@ -229,6 +241,164 @@ def add_trailing_silence(
     return normalize_audio(input_path, output_path, bitrate_kbps=bitrate_kbps, output_format=fmt)
 
 
+def _ffmetadata_escape(value: str) -> str:
+    # FFMETADATA1 escaping: = ; # \ and newlines
+    s = "" if value is None else str(value)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("=", "\\=")
+    s = s.replace(";", "\\;")
+    s = s.replace("#", "\\#")
+    s = s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\\n")
+    return s
+
+
+def _audio_duration_ms(path: Path) -> int:
+    p = Path(path)
+    # Try pydub
+    try:
+        from pydub import AudioSegment  # type: ignore
+
+        seg = AudioSegment.from_file(str(p))
+        return max(0, int(len(seg)))
+    except Exception:
+        pass
+    # Try ffprobe
+    try:
+        ffprobe = shutil.which("ffprobe")
+        if ffprobe:
+            cmd = [
+                ffprobe, "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(p),
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if res.returncode == 0:
+                out = (res.stdout or "").strip()
+                if out:
+                    return max(0, int(float(out) * 1000.0))
+    except Exception:
+        pass
+    return 0
+
+
+def _chapter_durations_ms(
+    chapter_files: list[Path],
+    pause_ms: int,
+    bitrate_kbps: int,
+    base_format: str,
+) -> list[int]:
+    """Get per-chapter durations as they will appear in the combined file (including trailing pause except last)."""
+    files = [Path(p) for p in chapter_files if Path(p).exists() and Path(p).stat().st_size > 0]
+    if not files:
+        return []
+    fmt = normalize_output_format(base_format)
+    ext = extension_for_format(fmt)
+    pause_ms = max(0, int(pause_ms))
+    bitrate_kbps = _clamp_bitrate(bitrate_kbps)
+
+    durations: list[int] = []
+    # Use normalized temp copies to reflect final per-chapter segment durations in the combined stream
+    try:
+        with tempfile.TemporaryDirectory(prefix="bookcoder_chdur_") as td:
+            td_path = Path(td)
+            total = len(files)
+            for i, f in enumerate(files):
+                tmp = td_path / f"ch_{i:04d}{ext}"
+                if pause_ms > 0 and i < total - 1:
+                    add_trailing_silence(f, tmp, pause_ms, bitrate_kbps=bitrate_kbps, output_format=fmt)
+                else:
+                    normalize_audio(f, tmp, bitrate_kbps=bitrate_kbps, output_format=fmt)
+                d = _audio_duration_ms(tmp)
+                if d <= 0:
+                    d = _audio_duration_ms(f) + (pause_ms if (pause_ms > 0 and i < total - 1) else 0)
+                durations.append(max(0, int(d)))
+    except Exception:
+        for i, f in enumerate(files):
+            d = _audio_duration_ms(f) + (pause_ms if (pause_ms > 0 and i < len(files) - 1) else 0)
+            durations.append(max(0, int(d)))
+    return durations
+
+
+def _build_ffmetadata_chapters(
+    chapter_titles: list[str],
+    chapter_durations_ms: list[int],
+    metadata: Optional[dict[str, str]] = None,
+) -> str:
+    lines = [";FFMETADATA1"]
+    md = metadata or {}
+    for key in ("title", "album", "artist", "album_artist", "composer", "genre", "comment", "date", "language"):
+        val = md.get(key)
+        if val is None:
+            continue
+        sval = str(val).strip()
+        if not sval:
+            continue
+        lines.append(f"{key}={_ffmetadata_escape(sval)}")
+    lines.append("")
+
+    start = 0
+    n = max(len(chapter_titles), len(chapter_durations_ms))
+    for i in range(n):
+        dur = int(chapter_durations_ms[i]) if i < len(chapter_durations_ms) else 0
+        dur = max(0, dur)
+        end = start + dur if dur > 0 else start
+        if end <= start:
+            end = start + 1  # keep chapter entries valid even if duration unknown
+        title = chapter_titles[i] if i < len(chapter_titles) and chapter_titles[i] else f"Chapter {i + 1}"
+        lines.extend([
+            "[CHAPTER]",
+            "TIMEBASE=1/1000",
+            f"START={start}",
+            f"END={end}",
+            f"title={_ffmetadata_escape(str(title))}",
+            "",
+        ])
+        start = end
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _mux_chapter_metadata_with_ffmpeg(
+    input_path: Path,
+    output_path: Path,
+    chapter_titles: list[str],
+    chapter_durations_ms: list[int],
+    metadata: Optional[dict[str, str]] = None,
+) -> bool:
+    ffmpeg = ensure_ffmpeg()
+    if not ffmpeg:
+        return False
+    in_path = Path(input_path)
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fmt = normalize_output_format(out_path.suffix.lstrip("."))
+    try:
+        with tempfile.TemporaryDirectory(prefix="bookcoder_meta_") as td:
+            meta_path = Path(td) / "chapters.ffmeta"
+            meta_text = _build_ffmetadata_chapters(chapter_titles, chapter_durations_ms, metadata=metadata)
+            meta_path.write_text(meta_text, encoding="utf-8")
+
+            cmd = [
+                ffmpeg, "-y",
+                "-i", str(in_path),
+                "-i", str(meta_path),
+                "-map", "0:a",
+                "-map_metadata", "1",
+                "-map_chapters", "1",
+                "-c", "copy",
+            ]
+            if fmt in ("m4a", "m4b"):
+                cmd.extend(["-movflags", "+faststart"])
+            cmd.append(str(out_path))
+
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode == 0 and out_path.exists() and out_path.stat().st_size > 0:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def combine_audio_files(
     chapter_files: list[Path],
     output_path: Path,
@@ -236,8 +406,14 @@ def combine_audio_files(
     bitrate_kbps: int = 128,
     output_format: Optional[str] = None,
     progress: Optional[Callable[[int, int], None]] = None,
+    chapter_titles: Optional[list[str]] = None,
+    metadata: Optional[dict[str, str]] = None,
 ) -> Path:
-    """Combine multiple chapter audio files into one audiobook file with pauses between chapters."""
+    """Combine multiple chapter audio files into one audiobook file with pauses between chapters.
+
+    If chapter_titles are provided and ffmpeg is available, chapter markers/metadata are embedded
+    (especially useful for M4B/M4A audiobooks).
+    """
     files = [Path(p) for p in chapter_files if Path(p).exists() and Path(p).stat().st_size > 0]
     if not files:
         raise AudioProcessingError("No chapter audio files to combine.")
@@ -252,6 +428,49 @@ def combine_audio_files(
 
     pause_ms = max(0, int(pause_ms))
     bitrate_kbps = _clamp_bitrate(bitrate_kbps)
+
+    def _finalize_with_chapters(combined_path: Path) -> Path:
+        titles = list(chapter_titles or [])
+        if not titles:
+            return combined_path
+        # Normalize titles count to files count
+        if len(titles) < len(files):
+            titles.extend([f"Chapter {i + 1}" for i in range(len(titles), len(files))])
+        elif len(titles) > len(files):
+            titles = titles[: len(files)]
+
+        durations = _chapter_durations_ms(files, pause_ms=pause_ms, bitrate_kbps=bitrate_kbps, base_format=fmt)
+        if not durations or len(durations) != len(files):
+            # fallback estimate
+            durations = []
+            for i, f in enumerate(files):
+                d = _audio_duration_ms(f) + (pause_ms if (pause_ms > 0 and i < len(files) - 1) else 0)
+                durations.append(max(1, int(d)))
+
+        muxed_tmp = combined_path.with_name(combined_path.stem + ".chapters" + combined_path.suffix)
+        try:
+            if _mux_chapter_metadata_with_ffmpeg(combined_path, muxed_tmp, titles, durations, metadata=metadata):
+                try:
+                    muxed_tmp.replace(combined_path)
+                except Exception:
+                    shutil.copy2(muxed_tmp, combined_path)
+                    try:
+                        muxed_tmp.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            else:
+                try:
+                    if muxed_tmp.exists():
+                        muxed_tmp.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            try:
+                if muxed_tmp.exists():
+                    muxed_tmp.unlink()
+            except Exception:
+                pass
+        return combined_path
 
     # pydub path (best control over pauses)
     try:
@@ -270,7 +489,7 @@ def combine_audio_files(
         if progress:
             progress(total, total)
         if _pydub_export(combined, output_path, bitrate_kbps, 44100):
-            return output_path
+            return _finalize_with_chapters(output_path)
     except Exception:
         pass
 
@@ -305,23 +524,23 @@ def combine_audio_files(
                 cmd = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(output_path)]
                 res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if res.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
-                    return output_path
+                    return _finalize_with_chapters(output_path)
 
                 # Fallback: re-encode concat
                 cmd2 = [ffmpeg, "-y", "-f", "concat", "-safe", "0", "-i", str(list_file)] + _ffmpeg_encode_args(output_path, bitrate_kbps, 44100)
                 res2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 if res2.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
-                    return output_path
+                    return _finalize_with_chapters(output_path)
         except Exception:
             pass
 
-    # Last resort: naive concat (only meaningful for mp3); for m4a this is unlikely to work but try as final fallback
+    # Last resort: naive concat (only meaningful for mp3); for AAC containers this is unlikely to work but try as final fallback
     try:
         with output_path.open("wb") as out:
             for f in files:
                 out.write(Path(f).read_bytes())
         if output_path.exists() and output_path.stat().st_size > 0:
-            return output_path
+            return _finalize_with_chapters(output_path)
     except Exception:
         pass
 
